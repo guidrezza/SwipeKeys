@@ -1,16 +1,20 @@
 # SwipeKeys
 
 SwipeKeys is a tiny open-source macOS helper that turns `WASD` and arrow keys
-into trackpad-like swipe events while a matching app is frontmost.
+into trackpad-like swipe events, and Space into a tap, while a matching app is
+frontmost.
 
 It was made for trackpad-only iPhone-on-Mac games, but it is generic: by default
 it activates for apps whose name or bundle identifier contains `subway`.
 
 ## Why
 
-Some iPhone games on macOS accept trackpad swipes but do not expose keyboard
-controls. SwipeKeys listens for a small set of keys and posts synthetic scroll
-wheel events that many of those apps interpret as swipes.
+Some iPhone games on macOS accept trackpad swipes and taps but do not expose
+keyboard controls. SwipeKeys listens for a small set of keys and posts
+synthetic input events that many of those apps interpret as touch gestures.
+
+The original key events still pass through normally. `WASD`, arrow keys, and
+Space are not blocked.
 
 ## Controls
 
@@ -20,6 +24,7 @@ wheel events that many of those apps interpret as swipes.
 | `S` or Down Arrow | Down |
 | `A` or Left Arrow | Left |
 | `D` or Right Arrow | Right |
+| Space | Tap the center of the frontmost game window |
 
 ## Install
 
@@ -73,12 +78,6 @@ If `gh` is not installed yet:
 brew install gh
 gh auth login
 ```
-
-## Limitations
-
-SwipeKeys cannot patch or modify App Store apps. It only sends normal macOS
-input events from outside the game. If a game ignores synthetic scroll-wheel
-events, SwipeKeys cannot force it to add keyboard controls.
 
 ## License
 

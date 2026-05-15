@@ -19,6 +19,7 @@ final class SwipeKeys {
     private let source: CGEventSource?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private let tapKeyCode: Int64 = 49
 
     private lazy var keyMap: [Int64: Swipe] = [
         13: Swipe(vertical: -options.intensity, horizontal: 0), // W
@@ -73,12 +74,17 @@ final class SwipeKeys {
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        guard let swipe = keyMap[keyCode], frontmostAppMatches() else {
+        guard frontmostAppMatches() else {
             return Unmanaged.passUnretained(event)
         }
 
-        post(swipe: swipe)
-        return nil
+        if let swipe = keyMap[keyCode] {
+            post(swipe: swipe)
+        } else if keyCode == tapKeyCode {
+            postTap()
+        }
+
+        return Unmanaged.passUnretained(event)
     }
 
     private func frontmostAppMatches() -> Bool {
@@ -113,6 +119,57 @@ final class SwipeKeys {
             event.post(tap: .cghidEventTap)
             usleep(4_500)
         }
+    }
+
+    private func postTap() {
+        let point = targetTapPoint()
+
+        if options.verbose {
+            print("Tap x=\(Int(point.x)) y=\(Int(point.y))")
+        }
+
+        guard
+            let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+            let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+        else {
+            return
+        }
+
+        down.post(tap: .cghidEventTap)
+        usleep(20_000)
+        up.post(tap: .cghidEventTap)
+    }
+
+    private func targetTapPoint() -> CGPoint {
+        guard
+            let app = NSWorkspace.shared.frontmostApplication,
+            let windowInfo = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+        else {
+            return CGEvent(source: source)?.location ?? .zero
+        }
+
+        for window in windowInfo {
+            guard
+                window[kCGWindowOwnerPID as String] as? pid_t == app.processIdentifier,
+                window[kCGWindowLayer as String] as? Int == 0,
+                let boundsValue = window[kCGWindowBounds as String]
+            else {
+                continue
+            }
+
+            let boundsDictionary = boundsValue as! CFDictionary
+            guard
+                let bounds = CGRect(dictionaryRepresentation: boundsDictionary),
+                bounds.width > 0,
+                bounds.height > 0
+            else {
+                continue
+            }
+
+            return CGPoint(x: bounds.midX, y: bounds.midY)
+        }
+
+        return CGEvent(source: source)?.location ?? .zero
     }
 }
 
@@ -180,8 +237,9 @@ func printHelp() {
     print("""
     SwipeKeys
 
-    Turns WASD and arrow keys into trackpad-like swipe events while a matching
-    app is frontmost.
+    Turns WASD and arrow keys into trackpad-like swipe events, and Space into
+    a tap, while a matching app is frontmost. Original key events still pass
+    through normally.
 
     Usage:
       swipekeys [--match text] [--intensity number] [--repeats number] [--verbose]

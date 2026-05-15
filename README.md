@@ -1,6 +1,6 @@
 # SwipeKeys
 
-A tiny macOS helper that lets `WASD`, arrow keys, and Space work in
+A tiny macOS app that lets `WASD`, arrow keys, and Space work in
 trackpad-first games.
 
 I made this to play Subway Surfers City on my MacBook after enjoying the game a
@@ -18,11 +18,11 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 | `D` or Right Arrow | Swipe right |
 | Space | Tap |
 
-The original key presses still pass through normally.
+The original key presses still pass through normally. Gestures happen at the
+mouse when it is over the game window; otherwise they happen at the center of
+the game window.
 
 ## Install
-
-### Simple Mac app
 
 You need Xcode command line tools or Xcode installed.
 
@@ -39,26 +39,10 @@ dist/SwipeKeys.app
 ```
 
 Drag `dist/SwipeKeys.app` into your Applications folder, then open it like any
-other Mac app. SwipeKeys lives in the menu bar while it is running.
+other Mac app.
 
 The first run asks for Accessibility permission. Enable SwipeKeys in System
 Settings, then open SwipeKeys again.
-
-### Command line
-
-You can also run it without making the app:
-
-```sh
-swift build -c release
-.build/release/swipekeys
-```
-
-## Options
-
-```sh
-swipekeys --match subway
-swipekeys --intensity 24 --repeats 6
-```
 
 ## License
 

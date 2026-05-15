@@ -18,45 +18,98 @@ let sizes: [(name: String, pixels: Int)] = [
     ("icon_512x512@2x.png", 1024),
 ]
 
-for size in sizes {
-    let image = NSImage(size: NSSize(width: size.pixels, height: size.pixels))
-    image.lockFocus()
+func roundedRect(_ rect: CGRect, radius: CGFloat) -> NSBezierPath {
+    NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+}
 
-    let rect = NSRect(x: 0, y: 0, width: size.pixels, height: size.pixels)
-    let radius = CGFloat(size.pixels) * 0.22
-    let background = NSBezierPath(roundedRect: rect.insetBy(dx: CGFloat(size.pixels) * 0.06, dy: CGFloat(size.pixels) * 0.06), xRadius: radius, yRadius: radius)
+func drawKey(_ text: String, in rect: CGRect, size: CGFloat, fill: NSColor = .white) {
+    NSColor.black.withAlphaComponent(0.18).setFill()
+    roundedRect(rect.offsetBy(dx: 0, dy: -size * 0.012), radius: size * 0.045).fill()
 
-    NSColor(calibratedRed: 0.05, green: 0.12, blue: 0.18, alpha: 1).setFill()
-    background.fill()
+    fill.setFill()
+    roundedRect(rect, radius: size * 0.045).fill()
 
-    let stripeWidth = CGFloat(size.pixels) * 0.16
-    let colors = [
-        NSColor(calibratedRed: 0.19, green: 0.74, blue: 0.46, alpha: 1),
-        NSColor(calibratedRed: 0.10, green: 0.49, blue: 0.93, alpha: 1),
-        NSColor(calibratedRed: 0.98, green: 0.77, blue: 0.22, alpha: 1),
-    ]
+    NSColor(calibratedRed: 0.10, green: 0.14, blue: 0.18, alpha: 1).setStroke()
+    roundedRect(rect.insetBy(dx: size * 0.004, dy: size * 0.004), radius: size * 0.04).stroke()
 
-    for index in 0..<3 {
-        let x = CGFloat(size.pixels) * (0.22 + CGFloat(index) * 0.20)
-        let stripe = NSBezierPath(roundedRect: NSRect(x: x, y: CGFloat(size.pixels) * 0.18, width: stripeWidth, height: CGFloat(size.pixels) * 0.64), xRadius: stripeWidth / 2, yRadius: stripeWidth / 2)
-        colors[index].setFill()
-        stripe.fill()
-    }
-
-    let keyRect = NSRect(x: CGFloat(size.pixels) * 0.28, y: CGFloat(size.pixels) * 0.34, width: CGFloat(size.pixels) * 0.44, height: CGFloat(size.pixels) * 0.32)
-    let key = NSBezierPath(roundedRect: keyRect, xRadius: CGFloat(size.pixels) * 0.06, yRadius: CGFloat(size.pixels) * 0.06)
-    NSColor.white.withAlphaComponent(0.92).setFill()
-    key.fill()
-
-    let letter = "W"
     let paragraph = NSMutableParagraphStyle()
     paragraph.alignment = .center
     let attributes: [NSAttributedString.Key: Any] = [
-        .font: NSFont.systemFont(ofSize: CGFloat(size.pixels) * 0.22, weight: .bold),
-        .foregroundColor: NSColor(calibratedRed: 0.05, green: 0.12, blue: 0.18, alpha: 1),
+        .font: NSFont.systemFont(ofSize: size * 0.12, weight: .bold),
+        .foregroundColor: NSColor(calibratedRed: 0.08, green: 0.12, blue: 0.16, alpha: 1),
         .paragraphStyle: paragraph,
     ]
-    letter.draw(in: keyRect.insetBy(dx: 0, dy: CGFloat(size.pixels) * 0.025), withAttributes: attributes)
+
+    text.draw(in: rect.insetBy(dx: 0, dy: size * 0.025), withAttributes: attributes)
+}
+
+func drawArrow(from start: CGPoint, to end: CGPoint, size: CGFloat) {
+    let path = NSBezierPath()
+    path.move(to: start)
+    path.line(to: end)
+    path.lineWidth = max(2, size * 0.028)
+    path.lineCapStyle = .round
+    NSColor(calibratedRed: 0.20, green: 0.68, blue: 1.0, alpha: 1).setStroke()
+    path.stroke()
+
+    let angle = atan2(end.y - start.y, end.x - start.x)
+    let head = size * 0.045
+    let left = CGPoint(x: end.x - cos(angle - .pi / 6) * head, y: end.y - sin(angle - .pi / 6) * head)
+    let right = CGPoint(x: end.x - cos(angle + .pi / 6) * head, y: end.y - sin(angle + .pi / 6) * head)
+
+    let headPath = NSBezierPath()
+    headPath.move(to: end)
+    headPath.line(to: left)
+    headPath.move(to: end)
+    headPath.line(to: right)
+    headPath.lineWidth = max(2, size * 0.028)
+    headPath.lineCapStyle = .round
+    headPath.stroke()
+}
+
+for size in sizes {
+    let side = CGFloat(size.pixels)
+    let image = NSImage(size: NSSize(width: side, height: side))
+    image.lockFocus()
+
+    let full = CGRect(x: 0, y: 0, width: side, height: side)
+    let iconRect = full.insetBy(dx: side * 0.055, dy: side * 0.055)
+    let background = roundedRect(iconRect, radius: side * 0.22)
+
+    NSGradient(colors: [
+        NSColor(calibratedRed: 0.13, green: 0.18, blue: 0.24, alpha: 1),
+        NSColor(calibratedRed: 0.04, green: 0.08, blue: 0.12, alpha: 1),
+    ])?.draw(in: background, angle: 90)
+
+    NSColor.white.withAlphaComponent(0.18).setStroke()
+    background.lineWidth = side * 0.012
+    background.stroke()
+
+    let keySize = side * 0.19
+    let gap = side * 0.028
+    let center = CGPoint(x: side * 0.50, y: side * 0.52)
+
+    let wRect = CGRect(x: center.x - keySize / 2, y: center.y + keySize / 2 + gap, width: keySize, height: keySize)
+    let aRect = CGRect(x: center.x - keySize * 1.5 - gap, y: center.y - keySize / 2, width: keySize, height: keySize)
+    let sRect = CGRect(x: center.x - keySize / 2, y: center.y - keySize / 2, width: keySize, height: keySize)
+    let dRect = CGRect(x: center.x + keySize / 2 + gap, y: center.y - keySize / 2, width: keySize, height: keySize)
+
+    drawKey("W", in: wRect, size: side)
+    drawKey("A", in: aRect, size: side)
+    drawKey("S", in: sRect, size: side)
+    drawKey("D", in: dRect, size: side)
+
+    drawArrow(from: CGPoint(x: center.x, y: wRect.maxY + side * 0.015), to: CGPoint(x: center.x, y: side * 0.84), size: side)
+    drawArrow(from: CGPoint(x: center.x, y: sRect.minY - side * 0.015), to: CGPoint(x: center.x, y: side * 0.31), size: side)
+    drawArrow(from: CGPoint(x: aRect.minX - side * 0.015, y: aRect.midY), to: CGPoint(x: side * 0.20, y: aRect.midY), size: side)
+    drawArrow(from: CGPoint(x: dRect.maxX + side * 0.015, y: dRect.midY), to: CGPoint(x: side * 0.80, y: dRect.midY), size: side)
+
+    let spaceRect = CGRect(x: side * 0.34, y: side * 0.18, width: side * 0.32, height: side * 0.075)
+    drawKey("SPACE", in: spaceRect, size: side * 0.42, fill: NSColor.white.withAlphaComponent(0.92))
+
+    let tap = NSBezierPath(ovalIn: CGRect(x: side * 0.475, y: side * 0.125, width: side * 0.05, height: side * 0.05))
+    NSColor(calibratedRed: 0.20, green: 0.68, blue: 1.0, alpha: 0.95).setFill()
+    tap.fill()
 
     image.unlockFocus()
 

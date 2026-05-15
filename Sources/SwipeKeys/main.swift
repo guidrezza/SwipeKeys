@@ -122,8 +122,10 @@ final class SwipeKeys {
     }
 
     private func post(swipe: Swipe) {
+        let point = targetGesturePoint()
+
         if options.verbose {
-            print("Swipe vertical=\(swipe.vertical) horizontal=\(swipe.horizontal)")
+            print("Swipe vertical=\(swipe.vertical) horizontal=\(swipe.horizontal) x=\(Int(point.x)) y=\(Int(point.y))")
         }
 
         for _ in 0..<options.repeats {
@@ -138,13 +140,14 @@ final class SwipeKeys {
                 continue
             }
 
+            event.location = point
             event.post(tap: .cghidEventTap)
             usleep(4_500)
         }
     }
 
     private func postTap() {
-        let point = targetTapPoint()
+        let point = targetGesturePoint()
 
         if options.verbose {
             print("Tap x=\(Int(point.x)) y=\(Int(point.y))")
@@ -162,7 +165,7 @@ final class SwipeKeys {
         up.post(tap: .cghidEventTap)
     }
 
-    private func targetTapPoint() -> CGPoint {
+    private func targetGesturePoint() -> CGPoint {
         guard
             let app = NSWorkspace.shared.frontmostApplication,
             let windowInfo = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
@@ -188,6 +191,11 @@ final class SwipeKeys {
                 continue
             }
 
+            let mouse = CGEvent(source: source)?.location ?? .zero
+            if bounds.contains(mouse) {
+                return mouse
+            }
+
             return CGPoint(x: bounds.midX, y: bounds.midY)
         }
 
@@ -195,26 +203,30 @@ final class SwipeKeys {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     private let swipeKeys: SwipeKeys
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var permissionTimer: Timer?
     private var isRunning = false
+    private var window: NSWindow?
+    private let statusLabel = NSTextField(labelWithString: "Starting...")
 
     init(options: Options) {
         self.swipeKeys = SwipeKeys(options: options)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
 
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "SwipeKeys")
             button.title = " SwipeKeys"
         }
 
+        showWindow()
         refreshStatus()
         startIfAllowed()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func startIfAllowed() {
@@ -238,12 +250,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshStatus() {
+        statusLabel.stringValue = isRunning ? "SwipeKeys is on" : "Enable Accessibility permission"
+
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: isRunning ? "Running" : "Needs Accessibility Permission", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Show Window", action: #selector(showWindowFromMenu), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "Open Accessibility Settings", action: #selector(openAccessibilitySettings), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Quit SwipeKeys", action: #selector(quit), keyEquivalent: "q"))
         statusItem.menu = menu
+    }
+
+    private func showWindow() {
+        if let window {
+            window.makeKeyAndOrderFront(nil)
+            return
+        }
+
+        let contentView = NSView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: "SwipeKeys")
+        titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
+        titleLabel.alignment = .center
+
+        statusLabel.font = .systemFont(ofSize: 16, weight: .medium)
+        statusLabel.alignment = .center
+
+        let bindingsLabel = NSTextField(labelWithString: "WASD / arrows -> swipe\nSpace -> tap")
+        bindingsLabel.font = .systemFont(ofSize: 14)
+        bindingsLabel.textColor = .secondaryLabelColor
+        bindingsLabel.alignment = .center
+        bindingsLabel.maximumNumberOfLines = 2
+
+        let hintLabel = NSTextField(labelWithString: "Gestures happen at the mouse when it is over the game, otherwise at the game window center.")
+        hintLabel.font = .systemFont(ofSize: 12)
+        hintLabel.textColor = .tertiaryLabelColor
+        hintLabel.alignment = .center
+        hintLabel.maximumNumberOfLines = 2
+
+        let stackView = NSStackView(views: [titleLabel, statusLabel, bindingsLabel, hintLabel])
+        stackView.orientation = .vertical
+        stackView.alignment = .centerX
+        stackView.spacing = 10
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+
+        contentView.addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
+            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+        ])
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 380, height: 190),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "SwipeKeys"
+        window.contentView = contentView
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        self.window = window
+    }
+
+    @objc private func showWindowFromMenu() {
+        showWindow()
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func openAccessibilitySettings() {

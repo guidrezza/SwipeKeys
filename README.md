@@ -1,30 +1,24 @@
 # SwipeKeys
 
-SwipeKeys is a tiny open-source macOS helper that turns `WASD` and arrow keys
-into trackpad-like swipe events, and Space into a tap, while a matching app is
-frontmost.
+A tiny macOS helper that lets `WASD`, arrow keys, and Space work in
+trackpad-first games.
 
-It was made for trackpad-only iPhone-on-Mac games, but it is generic: by default
-it activates for apps whose name or bundle identifier contains `subway`.
+I made this to play Subway Surfers City on my MacBook after enjoying the game a
+bit too much.
 
-## Why
-
-Some iPhone games on macOS accept trackpad swipes and taps but do not expose
-keyboard controls. SwipeKeys listens for a small set of keys and posts
-synthetic input events that many of those apps interpret as touch gestures.
-
-The original key events still pass through normally. `WASD`, arrow keys, and
-Space are not blocked.
+Made by [Guilherme Drezza](https://guidrezza.com).
 
 ## Controls
 
-| Key | Swipe |
+| Key | Action |
 | --- | --- |
-| `W` or Up Arrow | Up |
-| `S` or Down Arrow | Down |
-| `A` or Left Arrow | Left |
-| `D` or Right Arrow | Right |
-| Space | Tap the center of the frontmost game window |
+| `W` or Up Arrow | Swipe up |
+| `S` or Down Arrow | Swipe down |
+| `A` or Left Arrow | Swipe left |
+| `D` or Right Arrow | Swipe right |
+| Space | Tap |
+
+The original key presses still pass through normally.
 
 ## Install
 
@@ -42,43 +36,16 @@ Run it:
 .build/release/swipekeys
 ```
 
-The first run will ask for Accessibility permission. Enable SwipeKeys in
-System Settings, then run it again.
+The first run will ask for Accessibility permission. Enable it in System
+Settings, then run SwipeKeys again.
 
 ## Options
 
 ```sh
 swipekeys --match subway
-swipekeys --match "Subway Surfers"
 swipekeys --intensity 24 --repeats 6
-swipekeys --verbose
-```
-
-`--match` checks the frontmost app's visible name and bundle identifier. Keeping
-the match narrow prevents SwipeKeys from consuming keys in other apps.
-
-## Development
-
-```sh
-swift build
-swift run swipekeys --help
-```
-
-## Publishing
-
-From this folder, create the public GitHub repository and push it with:
-
-```sh
-gh repo create SwipeKeys --public --source=. --remote=origin --push
-```
-
-If `gh` is not installed yet:
-
-```sh
-brew install gh
-gh auth login
 ```
 
 ## License
 
-MIT
+MIT. See [LICENSE](LICENSE).

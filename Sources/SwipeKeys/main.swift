@@ -104,13 +104,22 @@ final class SwipeKeys {
             return Unmanaged.passUnretained(event)
         }
 
+        _ = perform(keyCode: keyCode)
+        return Unmanaged.passUnretained(event)
+    }
+
+    func perform(keyCode: Int64) -> Bool {
         if let swipe = keyMap[keyCode] {
             post(swipe: swipe)
-        } else if keyCode == tapKeyCode {
-            postTap()
+            return true
         }
 
-        return Unmanaged.passUnretained(event)
+        if keyCode == tapKeyCode {
+            postTap()
+            return true
+        }
+
+        return false
     }
 
     private func shouldHandleFrontmostApp() -> Bool {
@@ -239,11 +248,21 @@ final class SwipeKeys {
         needsDisplay = true
     }
 
+    func contains(screenPoint: CGPoint, in window: NSWindow?) -> Bool {
+        guard let window else {
+            return false
+        }
+
+        let windowPoint = window.convertPoint(fromScreen: screenPoint)
+        let localPoint = convert(windowPoint, from: nil)
+        return bounds.contains(localPoint)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 1, dy: 1), xRadius: 12, yRadius: 12)
-        NSColor.controlBackgroundColor.setFill()
+        NSColor.textBackgroundColor.withAlphaComponent(0.75).setFill()
         path.fill()
         NSColor.separatorColor.setStroke()
         path.lineWidth = 1
@@ -270,10 +289,18 @@ final class SwipeKeys {
         } else {
             markerLabel = "Test here"
             "Test here".draw(
-                in: NSRect(x: 12, y: bounds.midY - 10, width: bounds.width - 24, height: 24),
+                in: NSRect(x: 12, y: bounds.midY - 18, width: bounds.width - 24, height: 22),
                 withAttributes: [
                     .font: NSFont.systemFont(ofSize: 16, weight: .medium),
                     .foregroundColor: NSColor.secondaryLabelColor,
+                    .paragraphStyle: paragraph,
+                ]
+            )
+            "Move cursor here, then press a bound key".draw(
+                in: NSRect(x: 12, y: bounds.midY + 8, width: bounds.width - 24, height: 18),
+                withAttributes: [
+                    .font: NSFont.systemFont(ofSize: 11),
+                    .foregroundColor: NSColor.tertiaryLabelColor,
                     .paragraphStyle: paragraph,
                 ]
             )
@@ -289,6 +316,7 @@ final class SwipeKeys {
     private var window: NSWindow?
     private let testView = TestView(frame: .zero)
     private var actionObserver: NSObjectProtocol?
+    private var localKeyMonitor: Any?
 
     init(options: Options) {
         self.swipeKeys = SwipeKeys(options: options)
@@ -325,6 +353,7 @@ final class SwipeKeys {
         }
 
         showWindow()
+        installLocalTestMonitor()
         refreshStatus()
         startIfAllowed()
         NSApp.activate(ignoringOtherApps: true)
@@ -370,26 +399,36 @@ final class SwipeKeys {
         contentView.translatesAutoresizingMaskIntoConstraints = false
 
         let titleLabel = NSTextField(labelWithString: "SwipeKeys")
-        titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
         titleLabel.alignment = .center
 
         let swipeLabel = NSTextField(labelWithString: "WASD & arrows --> swipe")
-        swipeLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        swipeLabel.font = .systemFont(ofSize: 14, weight: .medium)
         swipeLabel.alignment = .center
 
         let tapLabel = NSTextField(labelWithString: "Spacebar --> tap")
-        tapLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        tapLabel.font = .systemFont(ofSize: 14, weight: .medium)
         tapLabel.alignment = .center
+
+        let bindingsStack = NSStackView(views: [swipeLabel, tapLabel])
+        bindingsStack.orientation = .vertical
+        bindingsStack.alignment = .centerX
+        bindingsStack.spacing = 4
 
         testView.translatesAutoresizingMaskIntoConstraints = false
 
         let cursorButton = linkButton(title: "Actions happen around the cursor", action: #selector(openAccessibilitySettings))
         let permissionButton = linkButton(title: "Enable accessibility permission", action: #selector(openAccessibilitySettings))
 
-        let stackView = NSStackView(views: [titleLabel, swipeLabel, tapLabel, testView, cursorButton, permissionButton])
+        let footerStack = NSStackView(views: [cursorButton, permissionButton])
+        footerStack.orientation = .vertical
+        footerStack.alignment = .centerX
+        footerStack.spacing = 3
+
+        let stackView = NSStackView(views: [titleLabel, bindingsStack, testView, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 8
+        stackView.spacing = 14
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
@@ -398,12 +437,12 @@ final class SwipeKeys {
             stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
             stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
             stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            testView.widthAnchor.constraint(equalToConstant: 300),
-            testView.heightAnchor.constraint(equalToConstant: 120),
+            testView.widthAnchor.constraint(equalToConstant: 320),
+            testView.heightAnchor.constraint(equalToConstant: 118),
         ])
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 380, height: 300),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -421,6 +460,23 @@ final class SwipeKeys {
         button.font = .systemFont(ofSize: 12)
         button.contentTintColor = .secondaryLabelColor
         return button
+    }
+
+    private func installLocalTestMonitor() {
+        guard localKeyMonitor == nil else {
+            return
+        }
+
+        localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard
+                let self,
+                self.testView.contains(screenPoint: NSEvent.mouseLocation, in: self.window)
+            else {
+                return event
+            }
+
+            return self.swipeKeys.perform(keyCode: Int64(event.keyCode)) ? nil : event
+        }
     }
 
     @objc private func showWindowFromMenu() {

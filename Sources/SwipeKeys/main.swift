@@ -37,11 +37,36 @@ final class SwipeKeys {
         self.source = CGEventSource(stateID: .hidSystemState)
     }
 
-    func start() {
+    func startCommandLine() {
         if !AXIsProcessTrusted() {
             AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
             print("SwipeKeys needs Accessibility permission. Enable it, then run this command again.")
             exit(1)
+        }
+
+        guard installEventTap() else {
+            print("Could not create keyboard event tap. Check Accessibility permission and try again.")
+            exit(1)
+        }
+
+        print("SwipeKeys is running. App match: \"\(options.appMatch)\". Press Control-C to quit.")
+        CFRunLoopRun()
+    }
+
+    func startApp(promptForPermission: Bool = false) -> Bool {
+        guard AXIsProcessTrusted() else {
+            if promptForPermission {
+                AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+            }
+            return false
+        }
+
+        return installEventTap()
+    }
+
+    private func installEventTap() -> Bool {
+        if eventTap != nil {
+            return true
         }
 
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
@@ -55,16 +80,13 @@ final class SwipeKeys {
         )
 
         guard let eventTap else {
-            print("Could not create keyboard event tap. Check Accessibility permission and try again.")
-            exit(1)
+            return false
         }
 
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
-
-        print("SwipeKeys is running. App match: \"\(options.appMatch)\". Press Control-C to quit.")
-        CFRunLoopRun()
+        return true
     }
 
     fileprivate func handle(event: CGEvent) -> Unmanaged<CGEvent>? {
@@ -173,6 +195,68 @@ final class SwipeKeys {
     }
 }
 
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let swipeKeys: SwipeKeys
+    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private var permissionTimer: Timer?
+    private var isRunning = false
+
+    init(options: Options) {
+        self.swipeKeys = SwipeKeys(options: options)
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+
+        if let button = statusItem.button {
+            button.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "SwipeKeys")
+            button.title = " SwipeKeys"
+        }
+
+        refreshStatus()
+        startIfAllowed()
+    }
+
+    private func startIfAllowed() {
+        isRunning = swipeKeys.startApp(promptForPermission: true)
+        refreshStatus()
+
+        if !isRunning {
+            permissionTimer?.invalidate()
+            permissionTimer = Timer.scheduledTimer(timeInterval: 2, target: self, selector: #selector(retryPermission), userInfo: nil, repeats: true)
+        }
+    }
+
+    @objc private func retryPermission(_ timer: Timer) {
+        isRunning = swipeKeys.startApp()
+        refreshStatus()
+
+        if isRunning {
+            timer.invalidate()
+            permissionTimer = nil
+        }
+    }
+
+    private func refreshStatus() {
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: isRunning ? "Running" : "Needs Accessibility Permission", action: nil, keyEquivalent: ""))
+        menu.addItem(.separator())
+        menu.addItem(NSMenuItem(title: "Open Accessibility Settings", action: #selector(openAccessibilitySettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem(title: "Quit SwipeKeys", action: #selector(quit), keyEquivalent: "q"))
+        statusItem.menu = menu
+    }
+
+    @objc private func openAccessibilitySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @MainActor @objc private func quit() {
+        NSApp.terminate(nil)
+    }
+}
+
 private func swipeKeysEventCallback(
     proxy: CGEventTapProxy,
     type: CGEventType,
@@ -252,4 +336,12 @@ func printHelp() {
 }
 
 let options = parseOptions(arguments: CommandLine.arguments)
-SwipeKeys(options: options).start()
+
+if Bundle.main.bundleURL.pathExtension == "app" {
+    let app = NSApplication.shared
+    let delegate = AppDelegate(options: options)
+    app.delegate = delegate
+    app.run()
+} else {
+    SwipeKeys(options: options).startCommandLine()
+}

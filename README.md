@@ -39,7 +39,7 @@ dist/SwipeKeys.app
 ```
 
 Drag `dist/SwipeKeys.app` into your Applications folder, then open it like any
-other Mac app.
+other Mac app. SwipeKeys lives in the menu bar while it is running.
 
 The first run asks for Accessibility permission. Enable SwipeKeys in System
 Settings, then open SwipeKeys again.

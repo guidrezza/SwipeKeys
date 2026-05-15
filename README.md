@@ -18,9 +18,8 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 | `D` or Right Arrow | Swipe right |
 | Space | Tap |
 
-The original key presses still pass through normally. Gestures happen at the
-mouse when it is over the game window; otherwise they happen at the center of
-the game window.
+The original key presses still pass through normally. Actions happen around the
+cursor.
 
 ## Install
 
@@ -43,6 +42,10 @@ other Mac app.
 
 The first run asks for Accessibility permission. Enable SwipeKeys in System
 Settings, then open SwipeKeys again.
+
+Use the "Test here" box in the app to confirm the real bindings. Put your
+cursor inside the box, then press `WASD`, an arrow key, or Space. SwipeKeys will
+show where it posted the actual swipe or tap action.
 
 ## License
 

@@ -22,59 +22,64 @@ func roundedRect(_ rect: CGRect, radius: CGFloat) -> NSBezierPath {
     NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
 }
 
-func drawKey(_ text: String, in rect: CGRect, side: CGFloat) {
-    NSColor.black.withAlphaComponent(0.16).setFill()
-    roundedRect(rect.offsetBy(dx: 0, dy: -side * 0.008), radius: side * 0.025).fill()
-
-    NSColor.white.withAlphaComponent(0.92).setFill()
-    roundedRect(rect, radius: side * 0.025).fill()
-
-    let paragraph = NSMutableParagraphStyle()
-    paragraph.alignment = .center
-    text.draw(
-        in: rect.insetBy(dx: 0, dy: side * 0.01),
-        withAttributes: [
-            .font: NSFont.systemFont(ofSize: rect.height * 0.42, weight: .bold),
-            .foregroundColor: NSColor(calibratedRed: 0.09, green: 0.13, blue: 0.18, alpha: 1),
-            .paragraphStyle: paragraph,
-        ]
-    )
+func drawStroke(_ color: NSColor, width: CGFloat, _ build: (NSBezierPath) -> Void) {
+    let path = NSBezierPath()
+    build(path)
+    path.lineWidth = width
+    path.lineCapStyle = .round
+    path.lineJoinStyle = .round
+    color.setStroke()
+    path.stroke()
 }
 
 func drawSwipeArc(side: CGFloat) {
-    let arc = NSBezierPath()
-    arc.move(to: CGPoint(x: side * 0.25, y: side * 0.66))
-    arc.curve(
-        to: CGPoint(x: side * 0.72, y: side * 0.70),
-        controlPoint1: CGPoint(x: side * 0.39, y: side * 0.83),
-        controlPoint2: CGPoint(x: side * 0.58, y: side * 0.84)
-    )
-    arc.lineWidth = side * 0.045
-    arc.lineCapStyle = .round
-    NSColor.white.withAlphaComponent(0.96).setStroke()
-    arc.stroke()
-
-    let arrow = NSBezierPath()
-    arrow.move(to: CGPoint(x: side * 0.72, y: side * 0.70))
-    arrow.line(to: CGPoint(x: side * 0.65, y: side * 0.76))
-    arrow.move(to: CGPoint(x: side * 0.72, y: side * 0.70))
-    arrow.line(to: CGPoint(x: side * 0.63, y: side * 0.68))
-    arrow.lineWidth = side * 0.045
-    arrow.lineCapStyle = .round
-    arrow.lineJoinStyle = .round
-    arrow.stroke()
+    drawStroke(.white.withAlphaComponent(0.96), width: side * 0.055) { path in
+        path.move(to: CGPoint(x: side * 0.25, y: side * 0.64))
+        path.curve(
+            to: CGPoint(x: side * 0.73, y: side * 0.66),
+            controlPoint1: CGPoint(x: side * 0.39, y: side * 0.82),
+            controlPoint2: CGPoint(x: side * 0.58, y: side * 0.82)
+        )
+        path.line(to: CGPoint(x: side * 0.65, y: side * 0.74))
+        path.move(to: CGPoint(x: side * 0.73, y: side * 0.66))
+        path.line(to: CGPoint(x: side * 0.62, y: side * 0.66))
+    }
 }
 
 func drawHand(side: CGFloat) {
-    NSColor.black.withAlphaComponent(0.14).setFill()
-    roundedRect(CGRect(x: side * 0.39, y: side * 0.28, width: side * 0.30, height: side * 0.24).offsetBy(dx: 0, dy: -side * 0.012), radius: side * 0.10).fill()
+    let shadowOffset = side * 0.014
+    let lineWidth = side * 0.042
 
-    NSColor.white.setFill()
-    roundedRect(CGRect(x: side * 0.48, y: side * 0.40, width: side * 0.082, height: side * 0.30), radius: side * 0.041).fill()
-    roundedRect(CGRect(x: side * 0.39, y: side * 0.29, width: side * 0.29, height: side * 0.22), radius: side * 0.095).fill()
-    roundedRect(CGRect(x: side * 0.34, y: side * 0.36, width: side * 0.18, height: side * 0.07), radius: side * 0.035).fill()
-    roundedRect(CGRect(x: side * 0.58, y: side * 0.42, width: side * 0.07, height: side * 0.16), radius: side * 0.035).fill()
-    roundedRect(CGRect(x: side * 0.64, y: side * 0.40, width: side * 0.065, height: side * 0.14), radius: side * 0.032).fill()
+    for offsetColor in [(shadowOffset, NSColor.black.withAlphaComponent(0.18)), (CGFloat(0), NSColor.white)] {
+        let offset = offsetColor.0
+        let color = offsetColor.1
+
+        drawStroke(color, width: lineWidth) { path in
+            path.move(to: CGPoint(x: side * 0.47, y: side * 0.36 - offset))
+            path.line(to: CGPoint(x: side * 0.47, y: side * 0.61 - offset))
+            path.curve(
+                to: CGPoint(x: side * 0.54, y: side * 0.62 - offset),
+                controlPoint1: CGPoint(x: side * 0.47, y: side * 0.66 - offset),
+                controlPoint2: CGPoint(x: side * 0.54, y: side * 0.66 - offset)
+            )
+            path.line(to: CGPoint(x: side * 0.58, y: side * 0.48 - offset))
+            path.move(to: CGPoint(x: side * 0.58, y: side * 0.48 - offset))
+            path.line(to: CGPoint(x: side * 0.64, y: side * 0.46 - offset))
+            path.move(to: CGPoint(x: side * 0.64, y: side * 0.46 - offset))
+            path.line(to: CGPoint(x: side * 0.70, y: side * 0.44 - offset))
+            path.move(to: CGPoint(x: side * 0.47, y: side * 0.36 - offset))
+            path.curve(
+                to: CGPoint(x: side * 0.68, y: side * 0.28 - offset),
+                controlPoint1: CGPoint(x: side * 0.50, y: side * 0.25 - offset),
+                controlPoint2: CGPoint(x: side * 0.63, y: side * 0.24 - offset)
+            )
+            path.curve(
+                to: CGPoint(x: side * 0.73, y: side * 0.43 - offset),
+                controlPoint1: CGPoint(x: side * 0.72, y: side * 0.32 - offset),
+                controlPoint2: CGPoint(x: side * 0.74, y: side * 0.38 - offset)
+            )
+        }
+    }
 }
 
 for size in sizes {
@@ -86,31 +91,20 @@ for size in sizes {
     let background = roundedRect(iconRect, radius: side * 0.22)
 
     NSGradient(colors: [
-        NSColor(calibratedRed: 0.08, green: 0.32, blue: 0.82, alpha: 1),
-        NSColor(calibratedRed: 0.12, green: 0.72, blue: 0.92, alpha: 1),
+        NSColor(calibratedRed: 0.03, green: 0.36, blue: 0.96, alpha: 1),
+        NSColor(calibratedRed: 0.18, green: 0.78, blue: 0.93, alpha: 1),
     ])?.draw(in: background, angle: 135)
 
-    NSColor.white.withAlphaComponent(0.18).setStroke()
-    background.lineWidth = side * 0.012
-    background.stroke()
-
-    let glow = NSBezierPath(ovalIn: CGRect(x: side * 0.24, y: side * 0.24, width: side * 0.52, height: side * 0.52))
-    NSColor.white.withAlphaComponent(0.16).setFill()
-    glow.fill()
+    let highlight = NSBezierPath(ovalIn: CGRect(x: side * 0.20, y: side * 0.18, width: side * 0.60, height: side * 0.60))
+    NSColor.white.withAlphaComponent(0.14).setFill()
+    highlight.fill()
 
     drawSwipeArc(side: side)
     drawHand(side: side)
 
-    let keyY = side * 0.22
-    let keyW = side * 0.105
-    let keyH = side * 0.075
-    let gap = side * 0.018
-    let startX = side * 0.25
-    for (index, key) in ["W", "A", "S", "D"].enumerated() {
-        drawKey(key, in: CGRect(x: startX + CGFloat(index) * (keyW + gap), y: keyY, width: keyW, height: keyH), side: side)
-    }
-
-    drawKey("Space", in: CGRect(x: side * 0.34, y: side * 0.13, width: side * 0.32, height: side * 0.055), side: side)
+    NSColor.white.withAlphaComponent(0.20).setStroke()
+    background.lineWidth = side * 0.012
+    background.stroke()
 
     image.unlockFocus()
 

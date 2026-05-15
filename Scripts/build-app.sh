@@ -47,4 +47,5 @@ cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 PLIST
 
 chmod +x "$MACOS_DIR/SwipeKeys"
+codesign --force --deep --sign - "$APP_DIR" >/dev/null
 echo "Built $APP_DIR"

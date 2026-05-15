@@ -190,7 +190,7 @@ final class SwipeKeys {
     }
 
     private func targetGesturePoint() -> CGPoint {
-        return CGEvent(source: source)?.location ?? .zero
+        return CGEvent(source: nil)?.location ?? .zero
     }
 
     private func label(for swipe: Swipe) -> String {
@@ -230,11 +230,20 @@ final class SwipeKeys {
         wantsLayer = true
     }
 
-    func show(action: String, screenPoint: CGPoint, in window: NSWindow?) {
+    override var acceptsFirstResponder: Bool {
+        true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+    }
+
+    func show(action: String, quartzPoint: CGPoint, in window: NSWindow?) {
         guard let window else {
             return
         }
 
+        let screenPoint = appKitScreenPoint(fromQuartzPoint: quartzPoint)
         let windowPoint = window.convertPoint(fromScreen: screenPoint)
         let localPoint = convert(windowPoint, from: nil)
 
@@ -306,6 +315,29 @@ final class SwipeKeys {
             )
         }
     }
+
+    private func appKitScreenPoint(fromQuartzPoint point: CGPoint) -> CGPoint {
+        for screen in NSScreen.screens {
+            guard
+                let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+            else {
+                continue
+            }
+
+            let displayID = CGDirectDisplayID(screenNumber.uint32Value)
+            let displayBounds = CGDisplayBounds(displayID)
+            guard displayBounds.contains(point) else {
+                continue
+            }
+
+            return CGPoint(
+                x: screen.frame.minX + (point.x - displayBounds.minX),
+                y: screen.frame.maxY - (point.y - displayBounds.minY)
+            )
+        }
+
+        return NSEvent.mouseLocation
+    }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -339,7 +371,7 @@ final class SwipeKeys {
                     return
                 }
 
-                self.testView.show(action: action, screenPoint: CGPoint(x: x, y: y), in: self.window)
+                self.testView.show(action: action, quartzPoint: CGPoint(x: x, y: y), in: self.window)
             }
         }
     }
@@ -450,6 +482,7 @@ final class SwipeKeys {
         window.contentView = contentView
         window.center()
         window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(testView)
         self.window = window
     }
 

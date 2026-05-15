@@ -349,7 +349,6 @@ final class SwipeKeys {
 
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "SwipeKeys")
-            button.title = " SwipeKeys"
         }
 
         showWindow()

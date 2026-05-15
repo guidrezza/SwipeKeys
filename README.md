@@ -22,22 +22,36 @@ The original key presses still pass through normally.
 
 ## Install
 
+### Simple Mac app
+
 You need Xcode command line tools or Xcode installed.
 
 ```sh
 git clone https://github.com/guidrezza/SwipeKeys.git
 cd SwipeKeys
-swift build -c release
+./Scripts/build-app.sh
 ```
 
-Run it:
+This creates:
 
 ```sh
-.build/release/swipekeys
+dist/SwipeKeys.app
 ```
 
-The first run will ask for Accessibility permission. Enable it in System
-Settings, then run SwipeKeys again.
+Drag `dist/SwipeKeys.app` into your Applications folder, then open it like any
+other Mac app.
+
+The first run asks for Accessibility permission. Enable SwipeKeys in System
+Settings, then open SwipeKeys again.
+
+### Command line
+
+You can also run it without making the app:
+
+```sh
+swift build -c release
+.build/release/swipekeys
+```
 
 ## Options
 

@@ -16,6 +16,7 @@ struct Options {
 
 extension Notification.Name {
     static let swipeKeysAction = Notification.Name("SwipeKeysAction")
+    static let swipeKeysEnabledChanged = Notification.Name("SwipeKeysEnabledChanged")
 }
 
 final class SwipeKeys {
@@ -24,6 +25,9 @@ final class SwipeKeys {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private let tapKeyCode: Int64 = 49
+    private let toggleKeyCode: Int64 = 40 // K
+    private let stateLock = NSLock()
+    private var enabled = true
 
     private lazy var keyMap: [Int64: Swipe] = [
         13: Swipe(vertical: -options.intensity, horizontal: 0), // W
@@ -53,7 +57,7 @@ final class SwipeKeys {
             exit(1)
         }
 
-        print("SwipeKeys is running. App match: \"\(options.appMatch)\". Press Control-C to quit.")
+        print("SwipeKeys is running. Press Control-Option-Command-K to toggle, or Control-C to quit.")
         CFRunLoopRun()
     }
 
@@ -100,7 +104,12 @@ final class SwipeKeys {
         }
 
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-        guard shouldHandleFrontmostApp() else {
+        if isToggleEvent(keyCode: keyCode, flags: event.flags) {
+            toggle()
+            return nil
+        }
+
+        guard isEnabled else {
             return Unmanaged.passUnretained(event)
         }
 
@@ -122,20 +131,43 @@ final class SwipeKeys {
         return false
     }
 
-    private func shouldHandleFrontmostApp() -> Bool {
-        guard let app = NSWorkspace.shared.frontmostApplication else {
+    var isEnabled: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return enabled
+    }
+
+    @discardableResult
+    func toggle() -> Bool {
+        stateLock.lock()
+        enabled.toggle()
+        let newValue = enabled
+        stateLock.unlock()
+
+        NotificationCenter.default.post(
+            name: .swipeKeysEnabledChanged,
+            object: nil,
+            userInfo: ["enabled": newValue]
+        )
+
+        return newValue
+    }
+
+    func isToggleEvent(keyCode: Int64, flags: CGEventFlags) -> Bool {
+        guard keyCode == toggleKeyCode else {
             return false
         }
 
-        if app.bundleIdentifier == Bundle.main.bundleIdentifier {
-            return true
+        let needed: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl]
+        return flags.intersection(needed) == needed
+    }
+
+    func isToggleEvent(keyCode: Int64, flags: NSEvent.ModifierFlags) -> Bool {
+        guard keyCode == toggleKeyCode else {
+            return false
         }
 
-        let needle = options.appMatch.lowercased()
-        let name = app.localizedName?.lowercased() ?? ""
-        let bundleID = app.bundleIdentifier?.lowercased() ?? ""
-
-        return name.contains(needle) || bundleID.contains(needle)
+        return flags.contains(.command) && flags.contains(.option) && flags.contains(.control)
     }
 
     private func post(swipe: Swipe) {
@@ -347,7 +379,9 @@ final class SwipeKeys {
     private var isRunning = false
     private var window: NSWindow?
     private let testView = TestView(frame: .zero)
+    private let statusLabel = NSTextField(labelWithString: "On")
     private var actionObserver: NSObjectProtocol?
+    private var enabledObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
 
     init(options: Options) {
@@ -374,6 +408,16 @@ final class SwipeKeys {
                 self.testView.show(action: action, quartzPoint: CGPoint(x: x, y: y), in: self.window)
             }
         }
+        self.enabledObserver = NotificationCenter.default.addObserver(
+            forName: .swipeKeysEnabledChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let enabled = notification.userInfo?["enabled"] as? Bool ?? true
+            Task { @MainActor [weak self, enabled] in
+                self?.refreshEnabledStatus(enabled)
+            }
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -385,8 +429,10 @@ final class SwipeKeys {
 
         showWindow()
         installLocalTestMonitor()
+        installMainMenu()
         refreshStatus()
         startIfAllowed()
+        refreshEnabledStatus(swipeKeys.isEnabled)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -410,13 +456,35 @@ final class SwipeKeys {
         }
     }
 
+    private func refreshEnabledStatus(_ enabled: Bool) {
+        statusLabel.stringValue = enabled ? "On" : "Off"
+        statusLabel.textColor = enabled ? .systemGreen : .secondaryLabelColor
+        refreshStatus()
+    }
+
     private func refreshStatus() {
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: isRunning ? "Running" : "Needs Accessibility Permission", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: swipeKeys.isEnabled ? "On" : "Off", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: isRunning ? "Accessibility Ready" : "Needs Accessibility Permission", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Show Window", action: #selector(showWindowFromMenu), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Open Accessibility Settings", action: #selector(openAccessibilitySettings), keyEquivalent: ","))
-        menu.addItem(NSMenuItem(title: "Quit SwipeKeys", action: #selector(quit), keyEquivalent: "q"))
+
+        let toggleItem = NSMenuItem(title: "Toggle On/Off", action: #selector(toggleFromMenu), keyEquivalent: "k")
+        toggleItem.target = self
+        toggleItem.keyEquivalentModifierMask = [.command, .option, .control]
+        menu.addItem(toggleItem)
+
+        let showItem = NSMenuItem(title: "Show Window", action: #selector(showWindowFromMenu), keyEquivalent: "")
+        showItem.target = self
+        menu.addItem(showItem)
+
+        let accessibilityItem = NSMenuItem(title: "Open Accessibility Settings", action: #selector(openAccessibilitySettings), keyEquivalent: ",")
+        accessibilityItem.target = self
+        menu.addItem(accessibilityItem)
+
+        let quitItem = NSMenuItem(title: "Quit SwipeKeys", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        menu.addItem(quitItem)
+
         statusItem.menu = menu
     }
 
@@ -432,6 +500,9 @@ final class SwipeKeys {
         let titleLabel = NSTextField(labelWithString: "SwipeKeys")
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
         titleLabel.alignment = .center
+
+        statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        statusLabel.alignment = .center
 
         let swipeLabel = NSTextField(labelWithString: "WASD & arrows --> swipe")
         swipeLabel.font = .systemFont(ofSize: 14, weight: .medium)
@@ -456,10 +527,20 @@ final class SwipeKeys {
         footerStack.alignment = .centerX
         footerStack.spacing = 3
 
-        let stackView = NSStackView(views: [titleLabel, bindingsStack, testView, footerStack])
+        let toggleLabel = NSTextField(labelWithString: "Toggle: control + option + command + K")
+        toggleLabel.font = .systemFont(ofSize: 11)
+        toggleLabel.textColor = .tertiaryLabelColor
+        toggleLabel.alignment = .center
+
+        let headerStack = NSStackView(views: [titleLabel, statusLabel])
+        headerStack.orientation = .vertical
+        headerStack.alignment = .centerX
+        headerStack.spacing = 2
+
+        let stackView = NSStackView(views: [headerStack, bindingsStack, testView, toggleLabel, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 14
+        stackView.spacing = 12
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
@@ -500,15 +581,44 @@ final class SwipeKeys {
         }
 
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard
-                let self,
-                self.testView.contains(screenPoint: NSEvent.mouseLocation, in: self.window)
-            else {
+            guard let self else {
+                return event
+            }
+
+            if event.modifierFlags.contains(.command), event.keyCode == 12 {
+                NSApp.terminate(nil)
+                return nil
+            }
+
+            if self.swipeKeys.isToggleEvent(keyCode: Int64(event.keyCode), flags: event.modifierFlags) {
+                self.swipeKeys.toggle()
+                return nil
+            }
+
+            guard self.swipeKeys.isEnabled, self.testView.contains(screenPoint: NSEvent.mouseLocation, in: self.window) else {
                 return event
             }
 
             return self.swipeKeys.perform(keyCode: Int64(event.keyCode)) ? nil : event
         }
+    }
+
+    private func installMainMenu() {
+        let appMenu = NSMenu()
+        let quitItem = NSMenuItem(title: "Quit SwipeKeys", action: #selector(quit), keyEquivalent: "q")
+        quitItem.target = self
+        appMenu.addItem(quitItem)
+
+        let appMenuItem = NSMenuItem()
+        appMenuItem.submenu = appMenu
+
+        let mainMenu = NSMenu()
+        mainMenu.addItem(appMenuItem)
+        NSApp.mainMenu = mainMenu
+    }
+
+    @objc private func toggleFromMenu() {
+        swipeKeys.toggle()
     }
 
     @objc private func showWindowFromMenu() {
@@ -592,8 +702,8 @@ func printHelp() {
     SwipeKeys
 
     Turns WASD and arrow keys into trackpad-like swipe events, and Space into
-    a tap, while a matching app is frontmost. Original key events still pass
-    through normally.
+    a tap wherever the cursor is. Original key events still pass through
+    normally.
 
     Usage:
       swipekeys [--match text] [--intensity number] [--repeats number] [--verbose]

@@ -17,6 +17,7 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 | `A` or Left Arrow | Swipe left |
 | `D` or Right Arrow | Swipe right |
 | Space | Tap |
+| `Control` + `Option` + `Command` + `K` | Toggle on/off |
 
 The original key presses still pass through normally. Actions happen around the
 cursor.
@@ -46,6 +47,8 @@ Settings, then open SwipeKeys again.
 Use the "Test here" box in the app to confirm the real bindings. Put your
 cursor inside the box, then press `WASD`, an arrow key, or Space. SwipeKeys will
 show where it posted the actual swipe or tap action.
+
+Press `Command` + `Q` while SwipeKeys is focused to quit.
 
 ## License
 

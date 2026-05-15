@@ -46,7 +46,10 @@ Settings, then open SwipeKeys again.
 
 Use the "Test here" box in the app to confirm the real bindings. Put your
 cursor inside the box, then press `WASD`, an arrow key, or Space. SwipeKeys will
-show where it posted the actual swipe or tap action.
+show an action only when the box receives the actual synthetic swipe or tap.
+
+The window should say `Global listener: active`. If it says permission is
+needed, enable SwipeKeys in Accessibility settings and reopen the app.
 
 Press `Command` + `Q` while SwipeKeys is focused to quit.
 

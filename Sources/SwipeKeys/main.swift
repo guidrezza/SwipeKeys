@@ -15,8 +15,8 @@ struct Options {
 }
 
 extension Notification.Name {
-    static let swipeKeysAction = Notification.Name("SwipeKeysAction")
     static let swipeKeysEnabledChanged = Notification.Name("SwipeKeysEnabledChanged")
+    static let swipeKeysTapStatusChanged = Notification.Name("SwipeKeysTapStatusChanged")
 }
 
 final class SwipeKeys {
@@ -28,6 +28,7 @@ final class SwipeKeys {
     private let toggleKeyCode: Int64 = 40 // K
     private let stateLock = NSLock()
     private var enabled = true
+    private var tapActive = false
 
     private lazy var keyMap: [Int64: Swipe] = [
         13: Swipe(vertical: -options.intensity, horizontal: 0), // W
@@ -57,7 +58,7 @@ final class SwipeKeys {
             exit(1)
         }
 
-        print("SwipeKeys is running. Press Control-Option-Command-K to toggle, or Control-C to quit.")
+        print("SwipeKeys is running. Press Control-Option-K to toggle, or Control-C to quit.")
         CFRunLoopRun()
     }
 
@@ -69,7 +70,7 @@ final class SwipeKeys {
             return false
         }
 
-        return true
+        return installEventTap()
     }
 
     private func installEventTap() -> Bool {
@@ -88,16 +89,27 @@ final class SwipeKeys {
         )
 
         guard let eventTap else {
+            publishTapStatus(active: false)
             return false
         }
 
         runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         CGEvent.tapEnable(tap: eventTap, enable: true)
+        publishTapStatus(active: true)
         return true
     }
 
-    fileprivate func handle(event: CGEvent) -> Unmanaged<CGEvent>? {
+    fileprivate func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            reenableEventTap()
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard type == .keyDown else {
+            return Unmanaged.passUnretained(event)
+        }
+
         let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
         if isRepeat {
             return Unmanaged.passUnretained(event)
@@ -109,12 +121,26 @@ final class SwipeKeys {
             return nil
         }
 
+        if frontmostAppIsSwipeKeys() {
+            return Unmanaged.passUnretained(event)
+        }
+
         guard isEnabled else {
             return Unmanaged.passUnretained(event)
         }
 
         _ = perform(keyCode: keyCode)
         return Unmanaged.passUnretained(event)
+    }
+
+    private func reenableEventTap() {
+        guard let eventTap else {
+            publishTapStatus(active: false)
+            return
+        }
+
+        CGEvent.tapEnable(tap: eventTap, enable: true)
+        publishTapStatus(active: true)
     }
 
     func perform(keyCode: Int64) -> Bool {
@@ -129,6 +155,10 @@ final class SwipeKeys {
         }
 
         return false
+    }
+
+    private func frontmostAppIsSwipeKeys() -> Bool {
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
     }
 
     var isEnabled: Bool {
@@ -172,7 +202,6 @@ final class SwipeKeys {
 
     private func post(swipe: Swipe) {
         let point = targetGesturePoint()
-        var posted = false
 
         if options.verbose {
             print("Swipe vertical=\(swipe.vertical) horizontal=\(swipe.horizontal) x=\(Int(point.x)) y=\(Int(point.y))")
@@ -192,12 +221,7 @@ final class SwipeKeys {
 
             event.location = point
             event.post(tap: .cghidEventTap)
-            posted = true
             usleep(4_500)
-        }
-
-        if posted {
-            publishAction(label(for: swipe), at: point)
         }
     }
 
@@ -218,32 +242,28 @@ final class SwipeKeys {
         down.post(tap: .cghidEventTap)
         usleep(20_000)
         up.post(tap: .cghidEventTap)
-        publishAction("tap", at: point)
     }
 
     private func targetGesturePoint() -> CGPoint {
         return CGEvent(source: nil)?.location ?? .zero
     }
 
-    private func label(for swipe: Swipe) -> String {
-        if swipe.vertical < 0 {
-            return "swipe up"
-        }
-        if swipe.vertical > 0 {
-            return "swipe down"
-        }
-        if swipe.horizontal < 0 {
-            return "swipe left"
-        }
-        return "swipe right"
+    private func publishTapStatus(active: Bool) {
+        stateLock.lock()
+        tapActive = active
+        stateLock.unlock()
+
+        NotificationCenter.default.post(
+            name: .swipeKeysTapStatusChanged,
+            object: nil,
+            userInfo: ["active": active]
+        )
     }
 
-    private func publishAction(_ label: String, at point: CGPoint) {
-        NotificationCenter.default.post(
-            name: .swipeKeysAction,
-            object: nil,
-            userInfo: ["action": label, "x": point.x, "y": point.y]
-        )
+    var isTapActive: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return tapActive
     }
 }
 
@@ -268,23 +288,28 @@ final class SwipeKeys {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        showDelivered(action: "tap", eventLocation: event.locationInWindow)
     }
 
-    func show(action: String, quartzPoint: CGPoint, in window: NSWindow?) {
-        guard let window else {
-            return
+    override func scrollWheel(with event: NSEvent) {
+        let action: String
+        if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) {
+            action = event.scrollingDeltaY > 0 ? "swipe up" : "swipe down"
+        } else {
+            action = event.scrollingDeltaX > 0 ? "swipe right" : "swipe left"
         }
 
-        let screenPoint = appKitScreenPoint(fromQuartzPoint: quartzPoint)
-        let windowPoint = window.convertPoint(fromScreen: screenPoint)
-        let localPoint = convert(windowPoint, from: nil)
+        showDelivered(action: action, eventLocation: event.locationInWindow)
+    }
 
+    private func showDelivered(action: String, eventLocation: CGPoint) {
+        let localPoint = convert(eventLocation, from: nil)
         guard bounds.contains(localPoint) else {
             return
         }
 
         markerPoint = localPoint
-        markerLabel = action
+        markerLabel = "\(action) received"
         markerDate = Date()
         needsDisplay = true
     }
@@ -348,28 +373,6 @@ final class SwipeKeys {
         }
     }
 
-    private func appKitScreenPoint(fromQuartzPoint point: CGPoint) -> CGPoint {
-        for screen in NSScreen.screens {
-            guard
-                let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
-            else {
-                continue
-            }
-
-            let displayID = CGDirectDisplayID(screenNumber.uint32Value)
-            let displayBounds = CGDisplayBounds(displayID)
-            guard displayBounds.contains(point) else {
-                continue
-            }
-
-            return CGPoint(
-                x: screen.frame.minX + (point.x - displayBounds.minX),
-                y: screen.frame.maxY - (point.y - displayBounds.minY)
-            )
-        }
-
-        return NSEvent.mouseLocation
-    }
 }
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -380,35 +383,14 @@ final class SwipeKeys {
     private var window: NSWindow?
     private let testView = TestView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "On")
-    private var actionObserver: NSObjectProtocol?
+    private let tapStatusLabel = NSTextField(labelWithString: "Global listener: checking")
     private var enabledObserver: NSObjectProtocol?
+    private var tapStatusObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
-    private var globalKeyMonitor: Any?
 
     init(options: Options) {
         self.swipeKeys = SwipeKeys(options: options)
         super.init()
-        self.actionObserver = NotificationCenter.default.addObserver(
-            forName: .swipeKeysAction,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            guard
-                let action = notification.userInfo?["action"] as? String,
-                let x = notification.userInfo?["x"] as? CGFloat,
-                let y = notification.userInfo?["y"] as? CGFloat
-            else {
-                return
-            }
-
-            Task { @MainActor [weak self, action, x, y] in
-                guard let self else {
-                    return
-                }
-
-                self.testView.show(action: action, quartzPoint: CGPoint(x: x, y: y), in: self.window)
-            }
-        }
         self.enabledObserver = NotificationCenter.default.addObserver(
             forName: .swipeKeysEnabledChanged,
             object: nil,
@@ -417,6 +399,16 @@ final class SwipeKeys {
             let enabled = notification.userInfo?["enabled"] as? Bool ?? true
             Task { @MainActor [weak self, enabled] in
                 self?.refreshEnabledStatus(enabled)
+            }
+        }
+        self.tapStatusObserver = NotificationCenter.default.addObserver(
+            forName: .swipeKeysTapStatusChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let active = notification.userInfo?["active"] as? Bool ?? false
+            Task { @MainActor [weak self, active] in
+                self?.refreshTapStatus(active)
             }
         }
     }
@@ -430,11 +422,11 @@ final class SwipeKeys {
 
         showWindow()
         installLocalTestMonitor()
-        installGlobalMonitor()
         installMainMenu()
         refreshStatus()
         startIfAllowed()
         refreshEnabledStatus(swipeKeys.isEnabled)
+        refreshTapStatus(swipeKeys.isTapActive)
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -461,6 +453,13 @@ final class SwipeKeys {
     private func refreshEnabledStatus(_ enabled: Bool) {
         statusLabel.stringValue = enabled ? "On" : "Off"
         statusLabel.textColor = enabled ? .systemGreen : .secondaryLabelColor
+        refreshStatus()
+    }
+
+    private func refreshTapStatus(_ active: Bool) {
+        tapStatusLabel.stringValue = active ? "Global listener: active" : "Global listener: permission needed"
+        tapStatusLabel.textColor = active ? .secondaryLabelColor : .systemOrange
+        isRunning = active
         refreshStatus()
     }
 
@@ -506,6 +505,9 @@ final class SwipeKeys {
         statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         statusLabel.alignment = .center
 
+        tapStatusLabel.font = .systemFont(ofSize: 11)
+        tapStatusLabel.alignment = .center
+
         let swipeLabel = NSTextField(labelWithString: "WASD & arrows --> swipe")
         swipeLabel.font = .systemFont(ofSize: 14, weight: .medium)
         swipeLabel.alignment = .center
@@ -534,7 +536,7 @@ final class SwipeKeys {
         toggleLabel.textColor = .tertiaryLabelColor
         toggleLabel.alignment = .center
 
-        let headerStack = NSStackView(views: [titleLabel, statusLabel])
+        let headerStack = NSStackView(views: [titleLabel, statusLabel, tapStatusLabel])
         headerStack.orientation = .vertical
         headerStack.alignment = .centerX
         headerStack.spacing = 2
@@ -605,30 +607,6 @@ final class SwipeKeys {
         }
     }
 
-    private func installGlobalMonitor() {
-        guard globalKeyMonitor == nil else {
-            return
-        }
-
-        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self else {
-                return
-            }
-
-            let keyCode = Int64(event.keyCode)
-            if self.swipeKeys.isToggleEvent(keyCode: keyCode, flags: event.modifierFlags) {
-                self.swipeKeys.toggle()
-                return
-            }
-
-            guard self.swipeKeys.isEnabled else {
-                return
-            }
-
-            _ = self.swipeKeys.perform(keyCode: keyCode)
-        }
-    }
-
     private func installMainMenu() {
         let appMenu = NSMenu()
         let quitItem = NSMenuItem(title: "Quit SwipeKeys", action: #selector(quit), keyEquivalent: "q")
@@ -669,12 +647,12 @@ private func swipeKeysEventCallback(
     event: CGEvent,
     userInfo: UnsafeMutableRawPointer?
 ) -> Unmanaged<CGEvent>? {
-    guard type == .keyDown, let userInfo else {
+    guard let userInfo else {
         return Unmanaged.passUnretained(event)
     }
 
     let app = Unmanaged<SwipeKeys>.fromOpaque(userInfo).takeUnretainedValue()
-    return app.handle(event: event)
+    return app.handle(type: type, event: event)
 }
 
 func parseOptions(arguments: [String]) -> Options {
@@ -732,10 +710,9 @@ func printHelp() {
     normally.
 
     Usage:
-      swipekeys [--match text] [--intensity number] [--repeats number] [--verbose]
+      swipekeys [--intensity number] [--repeats number] [--verbose]
 
     Defaults:
-      --match subway
       --intensity 18
       --repeats 5
     """)

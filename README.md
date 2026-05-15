@@ -17,7 +17,7 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 | `A` or Left Arrow | Swipe left |
 | `D` or Right Arrow | Swipe right |
 | Space | Tap |
-| `Control` + `Option` + `Command` + `K` | Toggle on/off |
+| `Control` + `Option` + `K` | Toggle on/off |
 
 The original key presses still pass through normally. Actions happen around the
 cursor.

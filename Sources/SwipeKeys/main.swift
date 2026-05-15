@@ -69,7 +69,7 @@ final class SwipeKeys {
             return false
         }
 
-        return installEventTap()
+        return true
     }
 
     private func installEventTap() -> Bool {
@@ -158,7 +158,7 @@ final class SwipeKeys {
             return false
         }
 
-        let needed: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl]
+        let needed: CGEventFlags = [.maskAlternate, .maskControl]
         return flags.intersection(needed) == needed
     }
 
@@ -167,7 +167,7 @@ final class SwipeKeys {
             return false
         }
 
-        return flags.contains(.command) && flags.contains(.option) && flags.contains(.control)
+        return flags.contains(.option) && flags.contains(.control)
     }
 
     private func post(swipe: Swipe) {
@@ -383,6 +383,7 @@ final class SwipeKeys {
     private var actionObserver: NSObjectProtocol?
     private var enabledObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
+    private var globalKeyMonitor: Any?
 
     init(options: Options) {
         self.swipeKeys = SwipeKeys(options: options)
@@ -429,6 +430,7 @@ final class SwipeKeys {
 
         showWindow()
         installLocalTestMonitor()
+        installGlobalMonitor()
         installMainMenu()
         refreshStatus()
         startIfAllowed()
@@ -437,7 +439,7 @@ final class SwipeKeys {
     }
 
     private func startIfAllowed() {
-        isRunning = swipeKeys.startApp(promptForPermission: true)
+        isRunning = swipeKeys.startApp()
         refreshStatus()
 
         if !isRunning {
@@ -470,7 +472,7 @@ final class SwipeKeys {
 
         let toggleItem = NSMenuItem(title: "Toggle On/Off", action: #selector(toggleFromMenu), keyEquivalent: "k")
         toggleItem.target = self
-        toggleItem.keyEquivalentModifierMask = [.command, .option, .control]
+        toggleItem.keyEquivalentModifierMask = [.option, .control]
         menu.addItem(toggleItem)
 
         let showItem = NSMenuItem(title: "Show Window", action: #selector(showWindowFromMenu), keyEquivalent: "")
@@ -527,7 +529,7 @@ final class SwipeKeys {
         footerStack.alignment = .centerX
         footerStack.spacing = 3
 
-        let toggleLabel = NSTextField(labelWithString: "Toggle: control + option + command + K")
+        let toggleLabel = NSTextField(labelWithString: "Toggle: control + option + K")
         toggleLabel.font = .systemFont(ofSize: 11)
         toggleLabel.textColor = .tertiaryLabelColor
         toggleLabel.alignment = .center
@@ -600,6 +602,30 @@ final class SwipeKeys {
             }
 
             return self.swipeKeys.perform(keyCode: Int64(event.keyCode)) ? nil : event
+        }
+    }
+
+    private func installGlobalMonitor() {
+        guard globalKeyMonitor == nil else {
+            return
+        }
+
+        globalKeyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else {
+                return
+            }
+
+            let keyCode = Int64(event.keyCode)
+            if self.swipeKeys.isToggleEvent(keyCode: keyCode, flags: event.modifierFlags) {
+                self.swipeKeys.toggle()
+                return
+            }
+
+            guard self.swipeKeys.isEnabled else {
+                return
+            }
+
+            _ = self.swipeKeys.perform(keyCode: keyCode)
         }
     }
 

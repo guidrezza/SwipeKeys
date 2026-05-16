@@ -46,10 +46,34 @@ final class SwipeKeys {
         self.source = CGEventSource(stateID: .hidSystemState)
     }
 
+    static var hasAccessibilityPermission: Bool {
+        AXIsProcessTrusted()
+    }
+
+    static var hasInputMonitoringPermission: Bool {
+        if #available(macOS 10.15, *) {
+            return CGPreflightListenEventAccess()
+        }
+
+        return true
+    }
+
+    static func requestInputMonitoringPermission() {
+        if #available(macOS 10.15, *) {
+            CGRequestListenEventAccess()
+        }
+    }
+
     func startCommandLine() {
-        if !AXIsProcessTrusted() {
+        if !Self.hasAccessibilityPermission {
             AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
             print("SwipeKeys needs Accessibility permission. Enable it, then run this command again.")
+            exit(1)
+        }
+
+        if !Self.hasInputMonitoringPermission {
+            Self.requestInputMonitoringPermission()
+            print("SwipeKeys needs Input Monitoring permission. Enable it, then run this command again.")
             exit(1)
         }
 
@@ -63,10 +87,14 @@ final class SwipeKeys {
     }
 
     func startApp(promptForPermission: Bool = false) -> Bool {
-        guard AXIsProcessTrusted() else {
+        guard Self.hasAccessibilityPermission else {
             if promptForPermission {
                 AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
             }
+            return false
+        }
+
+        guard Self.hasInputMonitoringPermission else {
             return false
         }
 
@@ -188,7 +216,7 @@ final class SwipeKeys {
             return false
         }
 
-        let needed: CGEventFlags = [.maskAlternate, .maskControl]
+        let needed: CGEventFlags = [.maskCommand, .maskAlternate, .maskControl]
         return flags.intersection(needed) == needed
     }
 
@@ -197,7 +225,7 @@ final class SwipeKeys {
             return false
         }
 
-        return flags.contains(.option) && flags.contains(.control)
+        return flags.contains(.command) && flags.contains(.option) && flags.contains(.control)
     }
 
     private func post(swipe: Swipe) {
@@ -384,6 +412,8 @@ final class SwipeKeys {
     private let testView = TestView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "On")
     private let tapStatusLabel = NSTextField(labelWithString: "Global listener: checking")
+    private let accessibilityStatusLabel = NSTextField(labelWithString: "Accessibility: checking")
+    private let inputMonitoringStatusLabel = NSTextField(labelWithString: "Input Monitoring: checking")
     private var enabledObserver: NSObjectProtocol?
     private var tapStatusObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
@@ -431,6 +461,7 @@ final class SwipeKeys {
     }
 
     private func startIfAllowed() {
+        refreshPermissionStatus()
         isRunning = swipeKeys.startApp()
         refreshStatus()
 
@@ -441,6 +472,7 @@ final class SwipeKeys {
     }
 
     @objc private func retryPermission(_ timer: Timer) {
+        refreshPermissionStatus()
         isRunning = swipeKeys.startApp()
         refreshStatus()
 
@@ -457,21 +489,33 @@ final class SwipeKeys {
     }
 
     private func refreshTapStatus(_ active: Bool) {
-        tapStatusLabel.stringValue = active ? "Global listener: active" : "Global listener: permission needed"
+        refreshPermissionStatus()
+        tapStatusLabel.stringValue = active ? "Global listener: active" : "Global listener: waiting"
         tapStatusLabel.textColor = active ? .secondaryLabelColor : .systemOrange
         isRunning = active
         refreshStatus()
     }
 
+    private func refreshPermissionStatus() {
+        let accessibilityReady = SwipeKeys.hasAccessibilityPermission
+        let inputReady = SwipeKeys.hasInputMonitoringPermission
+
+        accessibilityStatusLabel.stringValue = accessibilityReady ? "Accessibility: ready" : "Accessibility: needed"
+        accessibilityStatusLabel.textColor = accessibilityReady ? .secondaryLabelColor : .systemOrange
+
+        inputMonitoringStatusLabel.stringValue = inputReady ? "Input Monitoring: ready" : "Input Monitoring: needed"
+        inputMonitoringStatusLabel.textColor = inputReady ? .secondaryLabelColor : .systemOrange
+    }
+
     private func refreshStatus() {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: swipeKeys.isEnabled ? "On" : "Off", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: isRunning ? "Accessibility Ready" : "Needs Accessibility Permission", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: isRunning ? "Global Listener Active" : "Global Listener Waiting", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
 
         let toggleItem = NSMenuItem(title: "Toggle On/Off", action: #selector(toggleFromMenu), keyEquivalent: "k")
         toggleItem.target = self
-        toggleItem.keyEquivalentModifierMask = [.option, .control]
+        toggleItem.keyEquivalentModifierMask = [.command, .option, .control]
         menu.addItem(toggleItem)
 
         let showItem = NSMenuItem(title: "Show Window", action: #selector(showWindowFromMenu), keyEquivalent: "")
@@ -481,6 +525,10 @@ final class SwipeKeys {
         let accessibilityItem = NSMenuItem(title: "Open Accessibility Settings", action: #selector(openAccessibilitySettings), keyEquivalent: ",")
         accessibilityItem.target = self
         menu.addItem(accessibilityItem)
+
+        let inputMonitoringItem = NSMenuItem(title: "Open Input Monitoring Settings", action: #selector(openInputMonitoringSettings), keyEquivalent: "")
+        inputMonitoringItem.target = self
+        menu.addItem(inputMonitoringItem)
 
         let quitItem = NSMenuItem(title: "Quit SwipeKeys", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
@@ -508,6 +556,12 @@ final class SwipeKeys {
         tapStatusLabel.font = .systemFont(ofSize: 11)
         tapStatusLabel.alignment = .center
 
+        accessibilityStatusLabel.font = .systemFont(ofSize: 11)
+        accessibilityStatusLabel.alignment = .center
+
+        inputMonitoringStatusLabel.font = .systemFont(ofSize: 11)
+        inputMonitoringStatusLabel.alignment = .center
+
         let swipeLabel = NSTextField(labelWithString: "WASD & arrows --> swipe")
         swipeLabel.font = .systemFont(ofSize: 14, weight: .medium)
         swipeLabel.alignment = .center
@@ -524,19 +578,20 @@ final class SwipeKeys {
         testView.translatesAutoresizingMaskIntoConstraints = false
 
         let cursorButton = linkButton(title: "Actions happen around the cursor", action: #selector(openAccessibilitySettings))
-        let permissionButton = linkButton(title: "Enable accessibility permission", action: #selector(openAccessibilitySettings))
+        let accessibilityButton = linkButton(title: "Enable accessibility permission", action: #selector(openAccessibilitySettings))
+        let inputMonitoringButton = linkButton(title: "Enable input monitoring permission", action: #selector(openInputMonitoringSettings))
 
-        let footerStack = NSStackView(views: [cursorButton, permissionButton])
+        let footerStack = NSStackView(views: [cursorButton, accessibilityButton, inputMonitoringButton])
         footerStack.orientation = .vertical
         footerStack.alignment = .centerX
         footerStack.spacing = 3
 
-        let toggleLabel = NSTextField(labelWithString: "Toggle: control + option + K")
+        let toggleLabel = NSTextField(labelWithString: "Toggle: command + control + option + K")
         toggleLabel.font = .systemFont(ofSize: 11)
         toggleLabel.textColor = .tertiaryLabelColor
         toggleLabel.alignment = .center
 
-        let headerStack = NSStackView(views: [titleLabel, statusLabel, tapStatusLabel])
+        let headerStack = NSStackView(views: [titleLabel, statusLabel, tapStatusLabel, accessibilityStatusLabel, inputMonitoringStatusLabel])
         headerStack.orientation = .vertical
         headerStack.alignment = .centerX
         headerStack.spacing = 2
@@ -632,6 +687,14 @@ final class SwipeKeys {
 
     @objc private func openAccessibilitySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    @objc private func openInputMonitoringSettings() {
+        SwipeKeys.requestInputMonitoringPermission()
+
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
             NSWorkspace.shared.open(url)
         }
     }

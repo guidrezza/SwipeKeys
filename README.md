@@ -17,7 +17,7 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 | `A` or Left Arrow | Swipe left |
 | `D` or Right Arrow | Swipe right |
 | Space | Tap |
-| `Control` + `Option` + `K` | Toggle on/off |
+| `Command` + `Control` + `Option` + `K` | Toggle on/off |
 
 The original key presses still pass through normally. Actions happen around the
 cursor.
@@ -48,8 +48,8 @@ Use the "Test here" box in the app to confirm the real bindings. Put your
 cursor inside the box, then press `WASD`, an arrow key, or Space. SwipeKeys will
 show an action only when the box receives the actual synthetic swipe or tap.
 
-The window should say `Global listener: active`. If it says permission is
-needed, enable SwipeKeys in Accessibility settings and reopen the app.
+The window should say `Global listener: active`. If not, enable SwipeKeys in
+both Accessibility and Input Monitoring settings, then reopen the app.
 
 Press `Command` + `Q` while SwipeKeys is focused to quit.
 

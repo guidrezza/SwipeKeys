@@ -12,34 +12,6 @@ enum GestureMode: String, Sendable {
     case scrollSwipe
 }
 
-enum DragProfile: String, Sendable {
-    case strong
-    case fast
-    case turbo
-
-    var settings: DragSettings {
-        switch self {
-        case .strong:
-            DragSettings(distance: 86, steps: 6, pressDelay: 9_000, stepDelay: 3_500, restoreDelay: 1_500, tapDelay: 12_000)
-        case .fast:
-            DragSettings(distance: 70, steps: 5, pressDelay: 6_000, stepDelay: 2_500, restoreDelay: 1_000, tapDelay: 10_000)
-        case .turbo:
-            DragSettings(distance: 56, steps: 4, pressDelay: 4_000, stepDelay: 1_800, restoreDelay: 800, tapDelay: 8_000)
-        }
-    }
-
-    var title: String {
-        switch self {
-        case .strong:
-            "Strong"
-        case .fast:
-            "Fast"
-        case .turbo:
-            "Turbo"
-        }
-    }
-}
-
 struct DragSettings: Sendable {
     let distance: Int32
     let steps: Int
@@ -73,12 +45,18 @@ extension Notification.Name {
     static let swipeKeysEnabledChanged = Notification.Name("SwipeKeysEnabledChanged")
     static let swipeKeysTapStatusChanged = Notification.Name("SwipeKeysTapStatusChanged")
     static let swipeKeysModeChanged = Notification.Name("SwipeKeysModeChanged")
-    static let swipeKeysProfileChanged = Notification.Name("SwipeKeysProfileChanged")
 }
 
 final class SwipeKeys {
     private static let gestureModeDefaultsKey = "GestureMode"
-    private static let dragProfileDefaultsKey = "DragProfile"
+    private static let defaultDragSettings = DragSettings(
+        distance: 86,
+        steps: 6,
+        pressDelay: 9_000,
+        stepDelay: 3_500,
+        restoreDelay: 1_500,
+        tapDelay: 12_000
+    )
     private let options: Options
     private let source: CGEventSource?
     private let actionQueue = DispatchQueue(label: "com.guidrezza.SwipeKeys.actions", qos: .userInteractive)
@@ -94,7 +72,6 @@ final class SwipeKeys {
     private var enabled = true
     private var tapActive = false
     private var mode: GestureMode
-    private var profile: DragProfile
 
     private lazy var keyMap: [Int64: Swipe] = [
         13: Swipe(vertical: -1, horizontal: 0), // W
@@ -112,8 +89,6 @@ final class SwipeKeys {
         self.source = CGEventSource(stateID: .hidSystemState)
         let savedMode = UserDefaults.standard.string(forKey: Self.gestureModeDefaultsKey)
         self.mode = GestureMode(rawValue: savedMode ?? "") ?? .mouseDrag
-        let savedProfile = UserDefaults.standard.string(forKey: Self.dragProfileDefaultsKey)
-        self.profile = DragProfile(rawValue: savedProfile ?? "") ?? .strong
     }
 
     static var hasAccessibilityPermission: Bool {
@@ -289,12 +264,6 @@ final class SwipeKeys {
         return mode
     }
 
-    var dragProfile: DragProfile {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return profile
-    }
-
     func setGestureMode(_ newMode: GestureMode) {
         stateLock.lock()
         guard mode != newMode else {
@@ -310,24 +279,6 @@ final class SwipeKeys {
             name: .swipeKeysModeChanged,
             object: nil,
             userInfo: ["mode": newMode.rawValue]
-        )
-    }
-
-    func setDragProfile(_ newProfile: DragProfile) {
-        stateLock.lock()
-        guard profile != newProfile else {
-            stateLock.unlock()
-            return
-        }
-
-        profile = newProfile
-        stateLock.unlock()
-
-        UserDefaults.standard.set(newProfile.rawValue, forKey: Self.dragProfileDefaultsKey)
-        NotificationCenter.default.post(
-            name: .swipeKeysProfileChanged,
-            object: nil,
-            userInfo: ["profile": newProfile.rawValue]
         )
     }
 
@@ -436,7 +387,7 @@ final class SwipeKeys {
         var lastPoint = start
 
         if options.verbose {
-            print("\(dragProfile.title) drag from x=\(Int(start.x)) y=\(Int(start.y)) to x=\(Int(end.x)) y=\(Int(end.y))")
+            print("Drag from x=\(Int(start.x)) y=\(Int(start.y)) to x=\(Int(end.x)) y=\(Int(end.y))")
         }
 
         guard let down = mouseEvent(type: .leftMouseDown, point: start, clickState: 0) else {
@@ -575,7 +526,7 @@ final class SwipeKeys {
             )
         }
 
-        return dragProfile.settings
+        return Self.defaultDragSettings
     }
 
     private func targetGesturePoint() -> CGPoint {
@@ -730,16 +681,9 @@ extension SwipeKeys: @unchecked Sendable {}
         control.selectedSegment = swipeKeys.gestureMode == .mouseDrag ? 0 : 1
         return control
     }()
-    private lazy var profileControl: NSSegmentedControl = {
-        let control = NSSegmentedControl(labels: ["Strong", "Fast", "Turbo"], trackingMode: .selectOne, target: self, action: #selector(changeProfile(_:)))
-        control.segmentStyle = .rounded
-        control.selectedSegment = selectedSegment(for: swipeKeys.dragProfile)
-        return control
-    }()
     private var enabledObserver: NSObjectProtocol?
     private var tapStatusObserver: NSObjectProtocol?
     private var modeObserver: NSObjectProtocol?
-    private var profileObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
 
     init(options: Options) {
@@ -774,17 +718,6 @@ extension SwipeKeys: @unchecked Sendable {}
             let mode = GestureMode(rawValue: rawMode ?? "") ?? .mouseDrag
             Task { @MainActor [weak self, mode] in
                 self?.refreshModeControl(mode)
-            }
-        }
-        self.profileObserver = NotificationCenter.default.addObserver(
-            forName: .swipeKeysProfileChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            let rawProfile = notification.userInfo?["profile"] as? String
-            let profile = DragProfile(rawValue: rawProfile ?? "") ?? .strong
-            Task { @MainActor [weak self, profile] in
-                self?.refreshProfileControl(profile)
             }
         }
     }
@@ -865,11 +798,7 @@ extension SwipeKeys: @unchecked Sendable {}
             readinessLabel.stringValue = "Starting global listener"
             readinessLabel.textColor = .secondaryLabelColor
         } else {
-            if swipeKeys.gestureMode == .mouseDrag {
-                readinessLabel.stringValue = "Ready · \(swipeKeys.dragProfile.title)"
-            } else {
-                readinessLabel.stringValue = "Ready · Scroll Swipe"
-            }
+            readinessLabel.stringValue = swipeKeys.gestureMode == .mouseDrag ? "Ready · Mouse Drag" : "Ready · Scroll Swipe"
             readinessLabel.textColor = .secondaryLabelColor
         }
     }
@@ -929,7 +858,6 @@ extension SwipeKeys: @unchecked Sendable {}
 
         testView.translatesAutoresizingMaskIntoConstraints = false
         modeControl.translatesAutoresizingMaskIntoConstraints = false
-        profileControl.translatesAutoresizingMaskIntoConstraints = false
 
         let accessibilityButton = linkButton(title: "Accessibility", action: #selector(openAccessibilitySettings))
         let inputMonitoringButton = linkButton(title: "Input Monitoring", action: #selector(openInputMonitoringSettings))
@@ -949,10 +877,10 @@ extension SwipeKeys: @unchecked Sendable {}
         headerStack.alignment = .centerX
         headerStack.spacing = 3
 
-        let stackView = NSStackView(views: [headerStack, bindingsLabel, modeControl, profileControl, testView, footerStack])
+        let stackView = NSStackView(views: [headerStack, bindingsLabel, modeControl, testView, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 9
+        stackView.spacing = 10
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
@@ -964,11 +892,10 @@ extension SwipeKeys: @unchecked Sendable {}
             testView.widthAnchor.constraint(equalToConstant: 320),
             testView.heightAnchor.constraint(equalToConstant: 104),
             modeControl.widthAnchor.constraint(equalToConstant: 230),
-            profileControl.widthAnchor.constraint(equalToConstant: 230),
         ])
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 326),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 296),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -980,7 +907,6 @@ extension SwipeKeys: @unchecked Sendable {}
         window.makeFirstResponder(testView)
         self.window = window
         refreshModeControl(swipeKeys.gestureMode)
-        refreshProfileControl(swipeKeys.dragProfile)
     }
 
     private func linkButton(title: String, action: Selector) -> NSButton {
@@ -993,35 +919,7 @@ extension SwipeKeys: @unchecked Sendable {}
 
     private func refreshModeControl(_ mode: GestureMode) {
         modeControl.selectedSegment = mode == .mouseDrag ? 0 : 1
-        profileControl.isEnabled = mode == .mouseDrag
         refreshWindowStatus()
-    }
-
-    private func refreshProfileControl(_ profile: DragProfile) {
-        profileControl.selectedSegment = selectedSegment(for: profile)
-        refreshWindowStatus()
-    }
-
-    private func selectedSegment(for profile: DragProfile) -> Int {
-        switch profile {
-        case .strong:
-            0
-        case .fast:
-            1
-        case .turbo:
-            2
-        }
-    }
-
-    private func profile(for segment: Int) -> DragProfile {
-        switch segment {
-        case 2:
-            .turbo
-        case 1:
-            .fast
-        default:
-            .strong
-        }
     }
 
     private func installLocalTestMonitor() {
@@ -1074,10 +972,6 @@ extension SwipeKeys: @unchecked Sendable {}
 
     @objc private func changeMode(_ sender: NSSegmentedControl) {
         swipeKeys.setGestureMode(sender.selectedSegment == 0 ? .mouseDrag : .scrollSwipe)
-    }
-
-    @objc private func changeProfile(_ sender: NSSegmentedControl) {
-        swipeKeys.setDragProfile(profile(for: sender.selectedSegment))
     }
 
     @objc private func showWindowFromMenu() {
@@ -1190,7 +1084,6 @@ func printHelp() {
       --scroll-intensity 18
       --repeats 6
 
-    The app UI also includes Strong, Fast, and Turbo mouse-drag profiles.
     """)
 }
 

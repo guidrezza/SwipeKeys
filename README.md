@@ -25,11 +25,12 @@ cursor.
 
 Use the mode switch to choose:
 
-- `Mouse Drag`: quick mouse-down, drag, release, then return the cursor
+- `Mouse Drag`: tiny mouse-down, drag, release, then return the cursor
 - `Scroll Swipe`: the older simulated scroll swipe style
 
-Inputs are handled in a short queue so fast key presses do not overlap or build
-up forever.
+Inputs are handled one at a time in a short queue so fast key presses do not
+overlap. The queue has a safety cap so accidental spam cannot build up forever,
+and toggling off clears pending inputs immediately.
 
 ## Install
 

@@ -2,27 +2,32 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-struct Swipe {
+struct Swipe: Sendable {
     let vertical: Int32
     let horizontal: Int32
 }
 
-enum GestureMode: String {
+enum GestureMode: String, Sendable {
     case mouseDrag
     case scrollSwipe
 }
 
-enum InputAction {
+enum InputAction: Sendable {
     case swipe(Swipe)
     case tap
 }
 
+struct QueuedAction: Sendable {
+    let action: InputAction
+    let generation: Int
+}
+
 struct Options {
     var appMatch = "subway"
-    var intensity: Int32 = 56
+    var intensity: Int32 = 34
     var scrollIntensity: Int32 = 18
-    var repeats = 5
-    var maxQueuedActions = 2
+    var repeats = 3
+    var maxQueuedActions = 8
     var verbose = false
 }
 
@@ -39,7 +44,8 @@ final class SwipeKeys {
     private let actionQueue = DispatchQueue(label: "com.guidrezza.SwipeKeys.actions", qos: .userInteractive)
     private let actionLock = NSLock()
     private var actionRunning = false
-    private var pendingActions: [InputAction] = []
+    private var actionGeneration = 0
+    private var pendingActions: [QueuedAction] = []
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private let tapKeyCode: Int64 = 49
@@ -160,13 +166,11 @@ final class SwipeKeys {
         }
 
         let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
-        if isRepeat {
-            return Unmanaged.passUnretained(event)
-        }
-
         let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
         if isToggleEvent(keyCode: keyCode, flags: event.flags) {
-            toggle()
+            if !isRepeat {
+                toggle()
+            }
             return nil
         }
 
@@ -223,6 +227,10 @@ final class SwipeKeys {
         let newValue = enabled
         stateLock.unlock()
 
+        if !newValue {
+            cancelQueuedActions()
+        }
+
         NotificationCenter.default.post(
             name: .swipeKeysEnabledChanged,
             object: nil,
@@ -275,12 +283,13 @@ final class SwipeKeys {
 
     private func enqueue(_ action: InputAction) {
         actionLock.lock()
+        let queuedAction = QueuedAction(action: action, generation: actionGeneration)
         if actionRunning {
             let maxQueuedActions = max(1, options.maxQueuedActions)
-            if pendingActions.count >= maxQueuedActions {
-                pendingActions[pendingActions.count - 1] = action
-            } else {
-                pendingActions.append(action)
+            if pendingActions.count < maxQueuedActions {
+                pendingActions.append(queuedAction)
+            } else if options.verbose {
+                print("Dropping input because queue is full")
             }
             actionLock.unlock()
             return
@@ -288,16 +297,16 @@ final class SwipeKeys {
 
         actionRunning = true
         actionLock.unlock()
-        runOnActionQueue(action)
+        runOnActionQueue(queuedAction)
     }
 
-    private func runOnActionQueue(_ action: InputAction) {
+    private func runOnActionQueue(_ queuedAction: QueuedAction) {
         actionQueue.async { [weak self] in
             guard let self else {
                 return
             }
 
-            self.run(action)
+            self.run(queuedAction)
             self.finishAction()
         }
     }
@@ -315,26 +324,48 @@ final class SwipeKeys {
         }
     }
 
-    private func run(_ action: InputAction) {
-        switch action {
+    private func cancelQueuedActions() {
+        actionLock.lock()
+        actionGeneration += 1
+        pendingActions.removeAll()
+        actionLock.unlock()
+    }
+
+    private func run(_ queuedAction: QueuedAction) {
+        guard isEnabled, isCurrentActionGeneration(queuedAction.generation) else {
+            return
+        }
+
+        switch queuedAction.action {
         case .swipe(let swipe):
             switch gestureMode {
             case .mouseDrag:
-                postMouseDrag(swipe: swipe)
+                postMouseDrag(swipe: swipe, generation: queuedAction.generation)
             case .scrollSwipe:
-                postScrollSwipe(swipe: swipe)
+                postScrollSwipe(swipe: swipe, generation: queuedAction.generation)
             }
         case .tap:
-            postTap()
+            postTap(generation: queuedAction.generation)
         }
     }
 
-    private func postMouseDrag(swipe: Swipe) {
+    private func isCurrentActionGeneration(_ generation: Int) -> Bool {
+        actionLock.lock()
+        defer { actionLock.unlock() }
+        return generation == actionGeneration
+    }
+
+    private func shouldContinueAction(_ generation: Int) -> Bool {
+        isEnabled && isCurrentActionGeneration(generation)
+    }
+
+    private func postMouseDrag(swipe: Swipe, generation: Int) {
         let start = targetGesturePoint()
         let end = CGPoint(
             x: start.x + direction(for: swipe.horizontal) * CGFloat(abs(options.intensity)),
             y: start.y + direction(for: swipe.vertical) * CGFloat(abs(options.intensity))
         )
+        var lastPoint = start
 
         if options.verbose {
             print("Drag from x=\(Int(start.x)) y=\(Int(start.y)) to x=\(Int(end.x)) y=\(Int(end.y))")
@@ -345,9 +376,17 @@ final class SwipeKeys {
         }
 
         down.post(tap: .cghidEventTap)
-        usleep(7_000)
+        usleep(3_000)
 
         for step in 1...max(1, options.repeats) {
+            guard shouldContinueAction(generation) else {
+                if let up = mouseEvent(type: .leftMouseUp, point: lastPoint) {
+                    up.post(tap: .cghidEventTap)
+                }
+                restoreCursor(to: start)
+                return
+            }
+
             let progress = CGFloat(step) / CGFloat(max(1, options.repeats))
             let point = CGPoint(
                 x: start.x + (end.x - start.x) * progress,
@@ -359,21 +398,18 @@ final class SwipeKeys {
             }
 
             drag.post(tap: .cghidEventTap)
-            usleep(3_000)
+            lastPoint = point
+            usleep(1_500)
         }
 
         if let up = mouseEvent(type: .leftMouseUp, point: end) {
             up.post(tap: .cghidEventTap)
         }
 
-        usleep(2_000)
-        if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: start, mouseButton: .left) {
-            move.post(tap: .cghidEventTap)
-        }
-        CGWarpMouseCursorPosition(start)
+        restoreCursor(to: start)
     }
 
-    private func postScrollSwipe(swipe: Swipe) {
+    private func postScrollSwipe(swipe: Swipe, generation: Int) {
         let point = targetGesturePoint()
 
         if options.verbose {
@@ -381,6 +417,10 @@ final class SwipeKeys {
         }
 
         for _ in 0..<options.repeats {
+            guard shouldContinueAction(generation) else {
+                return
+            }
+
             guard let event = CGEvent(
                 scrollWheelEvent2Source: source,
                 units: .pixel,
@@ -394,8 +434,16 @@ final class SwipeKeys {
 
             event.location = point
             event.post(tap: .cghidEventTap)
-            usleep(4_500)
+            usleep(2_000)
         }
+    }
+
+    private func restoreCursor(to point: CGPoint) {
+        usleep(800)
+        if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) {
+            move.post(tap: .cghidEventTap)
+        }
+        CGWarpMouseCursorPosition(point)
     }
 
     private func mouseEvent(type: CGEventType, point: CGPoint) -> CGEvent? {
@@ -420,7 +468,11 @@ final class SwipeKeys {
         return 0
     }
 
-    private func postTap() {
+    private func postTap(generation: Int) {
+        guard shouldContinueAction(generation) else {
+            return
+        }
+
         let point = targetGesturePoint()
 
         if options.verbose {
@@ -435,7 +487,11 @@ final class SwipeKeys {
         }
 
         down.post(tap: .cghidEventTap)
-        usleep(20_000)
+        usleep(8_000)
+        guard shouldContinueAction(generation) else {
+            up.post(tap: .cghidEventTap)
+            return
+        }
         up.post(tap: .cghidEventTap)
     }
 
@@ -847,7 +903,9 @@ extension SwipeKeys: @unchecked Sendable {}
             }
 
             if self.swipeKeys.isToggleEvent(keyCode: Int64(event.keyCode), flags: event.modifierFlags) {
-                self.swipeKeys.toggle()
+                if !event.isARepeat {
+                    self.swipeKeys.toggle()
+                }
                 return nil
             }
 
@@ -985,9 +1043,9 @@ func printHelp() {
       swipekeys [--intensity pixels] [--scroll-intensity pixels] [--repeats number] [--verbose]
 
     Defaults:
-      --intensity 56
+      --intensity 34
       --scroll-intensity 18
-      --repeats 5
+      --repeats 3
     """)
 }
 

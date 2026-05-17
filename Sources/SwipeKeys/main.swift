@@ -12,6 +12,43 @@ enum GestureMode: String, Sendable {
     case scrollSwipe
 }
 
+enum DragProfile: String, Sendable {
+    case quick
+    case balanced
+    case strong
+
+    var settings: DragSettings {
+        switch self {
+        case .quick:
+            DragSettings(distance: 34, steps: 3, pressDelay: 3_000, stepDelay: 1_500, restoreDelay: 800, tapDelay: 8_000)
+        case .balanced:
+            DragSettings(distance: 56, steps: 5, pressDelay: 7_000, stepDelay: 3_000, restoreDelay: 1_200, tapDelay: 10_000)
+        case .strong:
+            DragSettings(distance: 86, steps: 6, pressDelay: 9_000, stepDelay: 3_500, restoreDelay: 1_500, tapDelay: 12_000)
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .quick:
+            "Quick"
+        case .balanced:
+            "Balanced"
+        case .strong:
+            "Strong"
+        }
+    }
+}
+
+struct DragSettings: Sendable {
+    let distance: Int32
+    let steps: Int
+    let pressDelay: useconds_t
+    let stepDelay: useconds_t
+    let restoreDelay: useconds_t
+    let tapDelay: useconds_t
+}
+
 enum InputAction: Sendable {
     case swipe(Swipe)
     case tap
@@ -24,10 +61,11 @@ struct QueuedAction: Sendable {
 
 struct Options {
     var appMatch = "subway"
-    var intensity: Int32 = 34
+    var intensity: Int32 = 56
     var scrollIntensity: Int32 = 18
-    var repeats = 3
+    var repeats = 5
     var maxQueuedActions = 8
+    var usesCustomDragSettings = false
     var verbose = false
 }
 
@@ -35,10 +73,12 @@ extension Notification.Name {
     static let swipeKeysEnabledChanged = Notification.Name("SwipeKeysEnabledChanged")
     static let swipeKeysTapStatusChanged = Notification.Name("SwipeKeysTapStatusChanged")
     static let swipeKeysModeChanged = Notification.Name("SwipeKeysModeChanged")
+    static let swipeKeysProfileChanged = Notification.Name("SwipeKeysProfileChanged")
 }
 
 final class SwipeKeys {
     private static let gestureModeDefaultsKey = "GestureMode"
+    private static let dragProfileDefaultsKey = "DragProfile"
     private let options: Options
     private let source: CGEventSource?
     private let actionQueue = DispatchQueue(label: "com.guidrezza.SwipeKeys.actions", qos: .userInteractive)
@@ -54,6 +94,7 @@ final class SwipeKeys {
     private var enabled = true
     private var tapActive = false
     private var mode: GestureMode
+    private var profile: DragProfile
 
     private lazy var keyMap: [Int64: Swipe] = [
         13: Swipe(vertical: -1, horizontal: 0), // W
@@ -71,6 +112,8 @@ final class SwipeKeys {
         self.source = CGEventSource(stateID: .hidSystemState)
         let savedMode = UserDefaults.standard.string(forKey: Self.gestureModeDefaultsKey)
         self.mode = GestureMode(rawValue: savedMode ?? "") ?? .mouseDrag
+        let savedProfile = UserDefaults.standard.string(forKey: Self.dragProfileDefaultsKey)
+        self.profile = DragProfile(rawValue: savedProfile ?? "") ?? .balanced
     }
 
     static var hasAccessibilityPermission: Bool {
@@ -246,6 +289,12 @@ final class SwipeKeys {
         return mode
     }
 
+    var dragProfile: DragProfile {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return profile
+    }
+
     func setGestureMode(_ newMode: GestureMode) {
         stateLock.lock()
         guard mode != newMode else {
@@ -261,6 +310,24 @@ final class SwipeKeys {
             name: .swipeKeysModeChanged,
             object: nil,
             userInfo: ["mode": newMode.rawValue]
+        )
+    }
+
+    func setDragProfile(_ newProfile: DragProfile) {
+        stateLock.lock()
+        guard profile != newProfile else {
+            stateLock.unlock()
+            return
+        }
+
+        profile = newProfile
+        stateLock.unlock()
+
+        UserDefaults.standard.set(newProfile.rawValue, forKey: Self.dragProfileDefaultsKey)
+        NotificationCenter.default.post(
+            name: .swipeKeysProfileChanged,
+            object: nil,
+            userInfo: ["profile": newProfile.rawValue]
         )
     }
 
@@ -360,15 +427,16 @@ final class SwipeKeys {
     }
 
     private func postMouseDrag(swipe: Swipe, generation: Int) {
+        let settings = currentDragSettings()
         let start = targetGesturePoint()
         let end = CGPoint(
-            x: start.x + direction(for: swipe.horizontal) * CGFloat(abs(options.intensity)),
-            y: start.y + direction(for: swipe.vertical) * CGFloat(abs(options.intensity))
+            x: start.x + direction(for: swipe.horizontal) * CGFloat(settings.distance),
+            y: start.y + direction(for: swipe.vertical) * CGFloat(settings.distance)
         )
         var lastPoint = start
 
         if options.verbose {
-            print("Drag from x=\(Int(start.x)) y=\(Int(start.y)) to x=\(Int(end.x)) y=\(Int(end.y))")
+            print("\(dragProfile.title) drag from x=\(Int(start.x)) y=\(Int(start.y)) to x=\(Int(end.x)) y=\(Int(end.y))")
         }
 
         guard let down = mouseEvent(type: .leftMouseDown, point: start) else {
@@ -376,18 +444,18 @@ final class SwipeKeys {
         }
 
         down.post(tap: .cghidEventTap)
-        usleep(3_000)
+        usleep(settings.pressDelay)
 
-        for step in 1...max(1, options.repeats) {
+        for step in 1...max(1, settings.steps) {
             guard shouldContinueAction(generation) else {
                 if let up = mouseEvent(type: .leftMouseUp, point: lastPoint) {
                     up.post(tap: .cghidEventTap)
                 }
-                restoreCursor(to: start)
+                restoreCursor(to: start, delay: settings.restoreDelay)
                 return
             }
 
-            let progress = CGFloat(step) / CGFloat(max(1, options.repeats))
+            let progress = CGFloat(step) / CGFloat(max(1, settings.steps))
             let point = CGPoint(
                 x: start.x + (end.x - start.x) * progress,
                 y: start.y + (end.y - start.y) * progress
@@ -399,14 +467,14 @@ final class SwipeKeys {
 
             drag.post(tap: .cghidEventTap)
             lastPoint = point
-            usleep(1_500)
+            usleep(settings.stepDelay)
         }
 
         if let up = mouseEvent(type: .leftMouseUp, point: end) {
             up.post(tap: .cghidEventTap)
         }
 
-        restoreCursor(to: start)
+        restoreCursor(to: start, delay: settings.restoreDelay)
     }
 
     private func postScrollSwipe(swipe: Swipe, generation: Int) {
@@ -438,8 +506,8 @@ final class SwipeKeys {
         }
     }
 
-    private func restoreCursor(to point: CGPoint) {
-        usleep(800)
+    private func restoreCursor(to point: CGPoint, delay: useconds_t) {
+        usleep(delay)
         if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) {
             move.post(tap: .cghidEventTap)
         }
@@ -487,12 +555,27 @@ final class SwipeKeys {
         }
 
         down.post(tap: .cghidEventTap)
-        usleep(8_000)
+        usleep(currentDragSettings().tapDelay)
         guard shouldContinueAction(generation) else {
             up.post(tap: .cghidEventTap)
             return
         }
         up.post(tap: .cghidEventTap)
+    }
+
+    private func currentDragSettings() -> DragSettings {
+        if options.usesCustomDragSettings {
+            return DragSettings(
+                distance: abs(options.intensity),
+                steps: max(1, options.repeats),
+                pressDelay: 7_000,
+                stepDelay: 3_000,
+                restoreDelay: 1_200,
+                tapDelay: 10_000
+            )
+        }
+
+        return dragProfile.settings
     }
 
     private func targetGesturePoint() -> CGPoint {
@@ -647,9 +730,16 @@ extension SwipeKeys: @unchecked Sendable {}
         control.selectedSegment = swipeKeys.gestureMode == .mouseDrag ? 0 : 1
         return control
     }()
+    private lazy var profileControl: NSSegmentedControl = {
+        let control = NSSegmentedControl(labels: ["Quick", "Balanced", "Strong"], trackingMode: .selectOne, target: self, action: #selector(changeProfile(_:)))
+        control.segmentStyle = .rounded
+        control.selectedSegment = selectedSegment(for: swipeKeys.dragProfile)
+        return control
+    }()
     private var enabledObserver: NSObjectProtocol?
     private var tapStatusObserver: NSObjectProtocol?
     private var modeObserver: NSObjectProtocol?
+    private var profileObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
 
     init(options: Options) {
@@ -684,6 +774,17 @@ extension SwipeKeys: @unchecked Sendable {}
             let mode = GestureMode(rawValue: rawMode ?? "") ?? .mouseDrag
             Task { @MainActor [weak self, mode] in
                 self?.refreshModeControl(mode)
+            }
+        }
+        self.profileObserver = NotificationCenter.default.addObserver(
+            forName: .swipeKeysProfileChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let rawProfile = notification.userInfo?["profile"] as? String
+            let profile = DragProfile(rawValue: rawProfile ?? "") ?? .balanced
+            Task { @MainActor [weak self, profile] in
+                self?.refreshProfileControl(profile)
             }
         }
     }
@@ -764,7 +865,11 @@ extension SwipeKeys: @unchecked Sendable {}
             readinessLabel.stringValue = "Starting global listener"
             readinessLabel.textColor = .secondaryLabelColor
         } else {
-            readinessLabel.stringValue = swipeKeys.gestureMode == .mouseDrag ? "Ready · Mouse Drag" : "Ready · Scroll Swipe"
+            if swipeKeys.gestureMode == .mouseDrag {
+                readinessLabel.stringValue = "Ready · \(swipeKeys.dragProfile.title)"
+            } else {
+                readinessLabel.stringValue = "Ready · Scroll Swipe"
+            }
             readinessLabel.textColor = .secondaryLabelColor
         }
     }
@@ -824,6 +929,7 @@ extension SwipeKeys: @unchecked Sendable {}
 
         testView.translatesAutoresizingMaskIntoConstraints = false
         modeControl.translatesAutoresizingMaskIntoConstraints = false
+        profileControl.translatesAutoresizingMaskIntoConstraints = false
 
         let accessibilityButton = linkButton(title: "Accessibility", action: #selector(openAccessibilitySettings))
         let inputMonitoringButton = linkButton(title: "Input Monitoring", action: #selector(openInputMonitoringSettings))
@@ -843,10 +949,10 @@ extension SwipeKeys: @unchecked Sendable {}
         headerStack.alignment = .centerX
         headerStack.spacing = 3
 
-        let stackView = NSStackView(views: [headerStack, bindingsLabel, modeControl, testView, footerStack])
+        let stackView = NSStackView(views: [headerStack, bindingsLabel, modeControl, profileControl, testView, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 10
+        stackView.spacing = 9
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
@@ -858,10 +964,11 @@ extension SwipeKeys: @unchecked Sendable {}
             testView.widthAnchor.constraint(equalToConstant: 320),
             testView.heightAnchor.constraint(equalToConstant: 104),
             modeControl.widthAnchor.constraint(equalToConstant: 230),
+            profileControl.widthAnchor.constraint(equalToConstant: 230),
         ])
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 296),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 326),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -872,6 +979,8 @@ extension SwipeKeys: @unchecked Sendable {}
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(testView)
         self.window = window
+        refreshModeControl(swipeKeys.gestureMode)
+        refreshProfileControl(swipeKeys.dragProfile)
     }
 
     private func linkButton(title: String, action: Selector) -> NSButton {
@@ -884,7 +993,35 @@ extension SwipeKeys: @unchecked Sendable {}
 
     private func refreshModeControl(_ mode: GestureMode) {
         modeControl.selectedSegment = mode == .mouseDrag ? 0 : 1
+        profileControl.isEnabled = mode == .mouseDrag
         refreshWindowStatus()
+    }
+
+    private func refreshProfileControl(_ profile: DragProfile) {
+        profileControl.selectedSegment = selectedSegment(for: profile)
+        refreshWindowStatus()
+    }
+
+    private func selectedSegment(for profile: DragProfile) -> Int {
+        switch profile {
+        case .quick:
+            0
+        case .balanced:
+            1
+        case .strong:
+            2
+        }
+    }
+
+    private func profile(for segment: Int) -> DragProfile {
+        switch segment {
+        case 0:
+            .quick
+        case 2:
+            .strong
+        default:
+            .balanced
+        }
     }
 
     private func installLocalTestMonitor() {
@@ -937,6 +1074,10 @@ extension SwipeKeys: @unchecked Sendable {}
 
     @objc private func changeMode(_ sender: NSSegmentedControl) {
         swipeKeys.setGestureMode(sender.selectedSegment == 0 ? .mouseDrag : .scrollSwipe)
+    }
+
+    @objc private func changeProfile(_ sender: NSSegmentedControl) {
+        swipeKeys.setDragProfile(profile(for: sender.selectedSegment))
     }
 
     @objc private func showWindowFromMenu() {
@@ -999,6 +1140,7 @@ func parseOptions(arguments: [String]) -> Options {
                 exit(2)
             }
             options.intensity = value
+            options.usesCustomDragSettings = true
         case "--scroll-intensity":
             index += 1
             guard index < arguments.count, let value = Int32(arguments[index]) else {
@@ -1013,6 +1155,7 @@ func parseOptions(arguments: [String]) -> Options {
                 exit(2)
             }
             options.repeats = max(1, value)
+            options.usesCustomDragSettings = true
         case "--verbose":
             options.verbose = true
         case "--help", "-h":
@@ -1043,9 +1186,11 @@ func printHelp() {
       swipekeys [--intensity pixels] [--scroll-intensity pixels] [--repeats number] [--verbose]
 
     Defaults:
-      --intensity 34
+      --intensity 56
       --scroll-intensity 18
-      --repeats 3
+      --repeats 5
+
+    The app UI also includes Quick, Balanced, and Strong mouse-drag profiles.
     """)
 }
 

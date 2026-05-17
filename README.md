@@ -28,6 +28,12 @@ Use the mode switch to choose:
 - `Mouse Drag`: tiny mouse-down, drag, release, then return the cursor
 - `Scroll Swipe`: the older simulated scroll swipe style
 
+Mouse Drag has three profiles:
+
+- `Quick`: shortest and fastest
+- `Balanced`: the default Subway Surfers City test profile
+- `Strong`: longer/clearer swipe for picky game windows
+
 Inputs are handled one at a time in a short queue so fast key presses do not
 overlap. The queue has a safety cap so accidental spam cannot build up forever,
 and toggling off clears pending inputs immediately.

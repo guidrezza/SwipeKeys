@@ -13,29 +13,29 @@ enum GestureMode: String, Sendable {
 }
 
 enum DragProfile: String, Sendable {
-    case quick
-    case balanced
     case strong
+    case longer
+    case held
 
     var settings: DragSettings {
         switch self {
-        case .quick:
-            DragSettings(distance: 34, steps: 3, pressDelay: 3_000, stepDelay: 1_500, restoreDelay: 800, tapDelay: 8_000)
-        case .balanced:
-            DragSettings(distance: 56, steps: 5, pressDelay: 7_000, stepDelay: 3_000, restoreDelay: 1_200, tapDelay: 10_000)
         case .strong:
             DragSettings(distance: 86, steps: 6, pressDelay: 9_000, stepDelay: 3_500, restoreDelay: 1_500, tapDelay: 12_000)
+        case .longer:
+            DragSettings(distance: 120, steps: 7, pressDelay: 9_000, stepDelay: 3_500, restoreDelay: 1_500, tapDelay: 12_000)
+        case .held:
+            DragSettings(distance: 86, steps: 7, pressDelay: 16_000, stepDelay: 5_000, restoreDelay: 1_500, tapDelay: 12_000)
         }
     }
 
     var title: String {
         switch self {
-        case .quick:
-            "Quick"
-        case .balanced:
-            "Balanced"
         case .strong:
             "Strong"
+        case .longer:
+            "Longer"
+        case .held:
+            "Held"
         }
     }
 }
@@ -61,9 +61,9 @@ struct QueuedAction: Sendable {
 
 struct Options {
     var appMatch = "subway"
-    var intensity: Int32 = 56
+    var intensity: Int32 = 86
     var scrollIntensity: Int32 = 18
-    var repeats = 5
+    var repeats = 6
     var maxQueuedActions = 8
     var usesCustomDragSettings = false
     var verbose = false
@@ -113,7 +113,7 @@ final class SwipeKeys {
         let savedMode = UserDefaults.standard.string(forKey: Self.gestureModeDefaultsKey)
         self.mode = GestureMode(rawValue: savedMode ?? "") ?? .mouseDrag
         let savedProfile = UserDefaults.standard.string(forKey: Self.dragProfileDefaultsKey)
-        self.profile = DragProfile(rawValue: savedProfile ?? "") ?? .balanced
+        self.profile = DragProfile(rawValue: savedProfile ?? "") ?? .strong
     }
 
     static var hasAccessibilityPermission: Bool {
@@ -439,7 +439,7 @@ final class SwipeKeys {
             print("\(dragProfile.title) drag from x=\(Int(start.x)) y=\(Int(start.y)) to x=\(Int(end.x)) y=\(Int(end.y))")
         }
 
-        guard let down = mouseEvent(type: .leftMouseDown, point: start) else {
+        guard let down = mouseEvent(type: .leftMouseDown, point: start, clickState: 0) else {
             return
         }
 
@@ -448,7 +448,7 @@ final class SwipeKeys {
 
         for step in 1...max(1, settings.steps) {
             guard shouldContinueAction(generation) else {
-                if let up = mouseEvent(type: .leftMouseUp, point: lastPoint) {
+                if let up = mouseEvent(type: .leftMouseUp, point: lastPoint, clickState: 0) {
                     up.post(tap: .cghidEventTap)
                 }
                 restoreCursor(to: start, delay: settings.restoreDelay)
@@ -461,7 +461,7 @@ final class SwipeKeys {
                 y: start.y + (end.y - start.y) * progress
             )
 
-            guard let drag = mouseEvent(type: .leftMouseDragged, point: point) else {
+            guard let drag = mouseEvent(type: .leftMouseDragged, point: point, clickState: 0) else {
                 continue
             }
 
@@ -470,7 +470,7 @@ final class SwipeKeys {
             usleep(settings.stepDelay)
         }
 
-        if let up = mouseEvent(type: .leftMouseUp, point: end) {
+        if let up = mouseEvent(type: .leftMouseUp, point: end, clickState: 0) {
             up.post(tap: .cghidEventTap)
         }
 
@@ -514,13 +514,13 @@ final class SwipeKeys {
         CGWarpMouseCursorPosition(point)
     }
 
-    private func mouseEvent(type: CGEventType, point: CGPoint) -> CGEvent? {
+    private func mouseEvent(type: CGEventType, point: CGPoint, clickState: Int64) -> CGEvent? {
         guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
             return nil
         }
 
         event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
-        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        event.setIntegerValueField(.mouseEventClickState, value: clickState)
         return event
     }
 
@@ -548,8 +548,8 @@ final class SwipeKeys {
         }
 
         guard
-            let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
-            let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+            let down = mouseEvent(type: .leftMouseDown, point: point, clickState: 1),
+            let up = mouseEvent(type: .leftMouseUp, point: point, clickState: 1)
         else {
             return
         }
@@ -568,10 +568,10 @@ final class SwipeKeys {
             return DragSettings(
                 distance: abs(options.intensity),
                 steps: max(1, options.repeats),
-                pressDelay: 7_000,
-                stepDelay: 3_000,
-                restoreDelay: 1_200,
-                tapDelay: 10_000
+                pressDelay: 9_000,
+                stepDelay: 3_500,
+                restoreDelay: 1_500,
+                tapDelay: 12_000
             )
         }
 
@@ -731,7 +731,7 @@ extension SwipeKeys: @unchecked Sendable {}
         return control
     }()
     private lazy var profileControl: NSSegmentedControl = {
-        let control = NSSegmentedControl(labels: ["Quick", "Balanced", "Strong"], trackingMode: .selectOne, target: self, action: #selector(changeProfile(_:)))
+        let control = NSSegmentedControl(labels: ["Strong", "Longer", "Held"], trackingMode: .selectOne, target: self, action: #selector(changeProfile(_:)))
         control.segmentStyle = .rounded
         control.selectedSegment = selectedSegment(for: swipeKeys.dragProfile)
         return control
@@ -782,7 +782,7 @@ extension SwipeKeys: @unchecked Sendable {}
             queue: .main
         ) { [weak self] notification in
             let rawProfile = notification.userInfo?["profile"] as? String
-            let profile = DragProfile(rawValue: rawProfile ?? "") ?? .balanced
+            let profile = DragProfile(rawValue: rawProfile ?? "") ?? .strong
             Task { @MainActor [weak self, profile] in
                 self?.refreshProfileControl(profile)
             }
@@ -1004,23 +1004,23 @@ extension SwipeKeys: @unchecked Sendable {}
 
     private func selectedSegment(for profile: DragProfile) -> Int {
         switch profile {
-        case .quick:
-            0
-        case .balanced:
-            1
         case .strong:
+            0
+        case .longer:
+            1
+        case .held:
             2
         }
     }
 
     private func profile(for segment: Int) -> DragProfile {
         switch segment {
-        case 0:
-            .quick
         case 2:
-            .strong
+            .held
+        case 1:
+            .longer
         default:
-            .balanced
+            .strong
         }
     }
 
@@ -1186,11 +1186,11 @@ func printHelp() {
       swipekeys [--intensity pixels] [--scroll-intensity pixels] [--repeats number] [--verbose]
 
     Defaults:
-      --intensity 56
+      --intensity 86
       --scroll-intensity 18
-      --repeats 5
+      --repeats 6
 
-    The app UI also includes Quick, Balanced, and Strong mouse-drag profiles.
+    The app UI also includes Strong, Longer, and Held mouse-drag profiles.
     """)
 }
 

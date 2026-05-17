@@ -1,7 +1,7 @@
 # SwipeKeys
 
 A tiny macOS app that lets `WASD`, arrow keys, and Space work in
-trackpad-first games.
+drag-first games.
 
 I made this to play Subway Surfers City on my MacBook after enjoying the game a
 bit too much.
@@ -19,7 +19,8 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 | Space | Tap |
 | `Command` + `Control` + `Option` + `K` | Toggle on/off |
 
-The original key presses still pass through normally. Actions happen around the
+SwipeKeys sends short mouse-drag gestures for swipes and a click for Space. The
+original key presses still pass through normally. Actions happen around the
 cursor.
 
 ## Install
@@ -41,15 +42,19 @@ dist/SwipeKeys.app
 Drag `dist/SwipeKeys.app` into your Applications folder, then open it like any
 other Mac app.
 
-The first run asks for Accessibility permission. Enable SwipeKeys in System
-Settings, then open SwipeKeys again.
+SwipeKeys needs two macOS permissions:
+
+- Accessibility
+- Input Monitoring
+
+Open SwipeKeys, use the `Accessibility` and `Input Monitoring` buttons, enable
+both in System Settings, then reopen SwipeKeys if macOS asks you to.
 
 Use the "Test here" box in the app to confirm the real bindings. Put your
 cursor inside the box, then press `WASD`, an arrow key, or Space. SwipeKeys will
 show an action only when the box receives the actual synthetic swipe or tap.
 
-The window should say `Global listener: active`. If not, enable SwipeKeys in
-both Accessibility and Input Monitoring settings, then reopen the app.
+The window should say `Ready around cursor` when global input is working.
 
 Press `Command` + `Q` while SwipeKeys is focused to quit.
 

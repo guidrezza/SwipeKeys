@@ -9,8 +9,8 @@ struct Swipe {
 
 struct Options {
     var appMatch = "subway"
-    var intensity: Int32 = 18
-    var repeats = 5
+    var intensity: Int32 = 170
+    var repeats = 8
     var verbose = false
 }
 
@@ -82,7 +82,7 @@ final class SwipeKeys {
             exit(1)
         }
 
-        print("SwipeKeys is running. Press Control-Option-K to toggle, or Control-C to quit.")
+        print("SwipeKeys is running. Press Command-Control-Option-K to toggle, or Control-C to quit.")
         CFRunLoopRun()
     }
 
@@ -229,28 +229,55 @@ final class SwipeKeys {
     }
 
     private func post(swipe: Swipe) {
-        let point = targetGesturePoint()
+        let start = targetGesturePoint()
+        let end = CGPoint(
+            x: start.x + direction(for: swipe.horizontal) * CGFloat(abs(options.intensity)),
+            y: start.y + direction(for: swipe.vertical) * CGFloat(abs(options.intensity))
+        )
 
         if options.verbose {
-            print("Swipe vertical=\(swipe.vertical) horizontal=\(swipe.horizontal) x=\(Int(point.x)) y=\(Int(point.y))")
+            print("Drag from x=\(Int(start.x)) y=\(Int(start.y)) to x=\(Int(end.x)) y=\(Int(end.y))")
         }
 
-        for _ in 0..<options.repeats {
-            guard let event = CGEvent(
-                scrollWheelEvent2Source: source,
-                units: .pixel,
-                wheelCount: 2,
-                wheel1: swipe.vertical,
-                wheel2: swipe.horizontal,
-                wheel3: 0
-            ) else {
+        guard
+            let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)
+        else {
+            return
+        }
+
+        down.post(tap: .cghidEventTap)
+        usleep(12_000)
+
+        for step in 1...max(1, options.repeats) {
+            let progress = CGFloat(step) / CGFloat(max(1, options.repeats))
+            let point = CGPoint(
+                x: start.x + (end.x - start.x) * progress,
+                y: start.y + (end.y - start.y) * progress
+            )
+
+            guard let drag = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left) else {
                 continue
             }
 
-            event.location = point
-            event.post(tap: .cghidEventTap)
-            usleep(4_500)
+            drag.post(tap: .cghidEventTap)
+            usleep(6_000)
         }
+
+        if let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left) {
+            up.post(tap: .cghidEventTap)
+        }
+    }
+
+    private func direction(for value: Int32) -> CGFloat {
+        if value < 0 {
+            return -1
+        }
+
+        if value > 0 {
+            return 1
+        }
+
+        return 0
     }
 
     private func postTap() {
@@ -317,6 +344,10 @@ final class SwipeKeys {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         showDelivered(action: "tap", eventLocation: event.locationInWindow)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        showDelivered(action: "drag", eventLocation: event.locationInWindow)
     }
 
     override func scrollWheel(with event: NSEvent) {
@@ -390,7 +421,7 @@ final class SwipeKeys {
                     .paragraphStyle: paragraph,
                 ]
             )
-            "Move cursor here, then press a bound key".draw(
+            "Hover, then press WASD/arrows/Space".draw(
                 in: NSRect(x: 12, y: bounds.midY + 8, width: bounds.width - 24, height: 18),
                 withAttributes: [
                     .font: NSFont.systemFont(ofSize: 11),
@@ -411,9 +442,7 @@ final class SwipeKeys {
     private var window: NSWindow?
     private let testView = TestView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "On")
-    private let tapStatusLabel = NSTextField(labelWithString: "Global listener: checking")
-    private let accessibilityStatusLabel = NSTextField(labelWithString: "Accessibility: checking")
-    private let inputMonitoringStatusLabel = NSTextField(labelWithString: "Input Monitoring: checking")
+    private let readinessLabel = NSTextField(labelWithString: "Checking permissions")
     private var enabledObserver: NSObjectProtocol?
     private var tapStatusObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
@@ -483,28 +512,45 @@ final class SwipeKeys {
     }
 
     private func refreshEnabledStatus(_ enabled: Bool) {
-        statusLabel.stringValue = enabled ? "On" : "Off"
-        statusLabel.textColor = enabled ? .systemGreen : .secondaryLabelColor
+        refreshWindowStatus()
         refreshStatus()
     }
 
     private func refreshTapStatus(_ active: Bool) {
         refreshPermissionStatus()
-        tapStatusLabel.stringValue = active ? "Global listener: active" : "Global listener: waiting"
-        tapStatusLabel.textColor = active ? .secondaryLabelColor : .systemOrange
         isRunning = active
+        refreshWindowStatus()
         refreshStatus()
     }
 
     private func refreshPermissionStatus() {
+        refreshWindowStatus()
+    }
+
+    private func refreshWindowStatus() {
         let accessibilityReady = SwipeKeys.hasAccessibilityPermission
         let inputReady = SwipeKeys.hasInputMonitoringPermission
+        let enabled = swipeKeys.isEnabled
 
-        accessibilityStatusLabel.stringValue = accessibilityReady ? "Accessibility: ready" : "Accessibility: needed"
-        accessibilityStatusLabel.textColor = accessibilityReady ? .secondaryLabelColor : .systemOrange
+        statusLabel.stringValue = enabled ? "On" : "Off"
+        statusLabel.textColor = enabled ? .systemGreen : .secondaryLabelColor
 
-        inputMonitoringStatusLabel.stringValue = inputReady ? "Input Monitoring: ready" : "Input Monitoring: needed"
-        inputMonitoringStatusLabel.textColor = inputReady ? .secondaryLabelColor : .systemOrange
+        if !accessibilityReady && !inputReady {
+            readinessLabel.stringValue = "Needs Accessibility + Input Monitoring"
+            readinessLabel.textColor = .systemOrange
+        } else if !accessibilityReady {
+            readinessLabel.stringValue = "Needs Accessibility"
+            readinessLabel.textColor = .systemOrange
+        } else if !inputReady {
+            readinessLabel.stringValue = "Needs Input Monitoring"
+            readinessLabel.textColor = .systemOrange
+        } else if !swipeKeys.isTapActive {
+            readinessLabel.stringValue = "Starting global listener"
+            readinessLabel.textColor = .secondaryLabelColor
+        } else {
+            readinessLabel.stringValue = "Ready around cursor"
+            readinessLabel.textColor = .secondaryLabelColor
+        }
     }
 
     private func refreshStatus() {
@@ -547,59 +593,43 @@ final class SwipeKeys {
         contentView.translatesAutoresizingMaskIntoConstraints = false
 
         let titleLabel = NSTextField(labelWithString: "SwipeKeys")
-        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
         titleLabel.alignment = .center
 
         statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         statusLabel.alignment = .center
 
-        tapStatusLabel.font = .systemFont(ofSize: 11)
-        tapStatusLabel.alignment = .center
+        readinessLabel.font = .systemFont(ofSize: 12, weight: .medium)
+        readinessLabel.alignment = .center
 
-        accessibilityStatusLabel.font = .systemFont(ofSize: 11)
-        accessibilityStatusLabel.alignment = .center
-
-        inputMonitoringStatusLabel.font = .systemFont(ofSize: 11)
-        inputMonitoringStatusLabel.alignment = .center
-
-        let swipeLabel = NSTextField(labelWithString: "WASD & arrows --> swipe")
-        swipeLabel.font = .systemFont(ofSize: 14, weight: .medium)
-        swipeLabel.alignment = .center
-
-        let tapLabel = NSTextField(labelWithString: "Spacebar --> tap")
-        tapLabel.font = .systemFont(ofSize: 14, weight: .medium)
-        tapLabel.alignment = .center
-
-        let bindingsStack = NSStackView(views: [swipeLabel, tapLabel])
-        bindingsStack.orientation = .vertical
-        bindingsStack.alignment = .centerX
-        bindingsStack.spacing = 4
+        let bindingsLabel = NSTextField(labelWithString: "WASD/arrows swipe · Space taps")
+        bindingsLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        bindingsLabel.alignment = .center
 
         testView.translatesAutoresizingMaskIntoConstraints = false
 
-        let cursorButton = linkButton(title: "Actions happen around the cursor", action: #selector(openAccessibilitySettings))
-        let accessibilityButton = linkButton(title: "Enable accessibility permission", action: #selector(openAccessibilitySettings))
-        let inputMonitoringButton = linkButton(title: "Enable input monitoring permission", action: #selector(openInputMonitoringSettings))
+        let accessibilityButton = linkButton(title: "Accessibility", action: #selector(openAccessibilitySettings))
+        let inputMonitoringButton = linkButton(title: "Input Monitoring", action: #selector(openInputMonitoringSettings))
 
-        let footerStack = NSStackView(views: [cursorButton, accessibilityButton, inputMonitoringButton])
-        footerStack.orientation = .vertical
-        footerStack.alignment = .centerX
-        footerStack.spacing = 3
-
-        let toggleLabel = NSTextField(labelWithString: "Toggle: command + control + option + K")
-        toggleLabel.font = .systemFont(ofSize: 11)
+        let toggleLabel = NSTextField(labelWithString: "⌘⌃⌥K toggles")
+        toggleLabel.font = .systemFont(ofSize: 12)
         toggleLabel.textColor = .tertiaryLabelColor
         toggleLabel.alignment = .center
 
-        let headerStack = NSStackView(views: [titleLabel, statusLabel, tapStatusLabel, accessibilityStatusLabel, inputMonitoringStatusLabel])
+        let footerStack = NSStackView(views: [toggleLabel, accessibilityButton, inputMonitoringButton])
+        footerStack.orientation = .horizontal
+        footerStack.alignment = .centerY
+        footerStack.spacing = 12
+
+        let headerStack = NSStackView(views: [titleLabel, statusLabel, readinessLabel])
         headerStack.orientation = .vertical
         headerStack.alignment = .centerX
-        headerStack.spacing = 2
+        headerStack.spacing = 3
 
-        let stackView = NSStackView(views: [headerStack, bindingsStack, testView, toggleLabel, footerStack])
+        let stackView = NSStackView(views: [headerStack, bindingsLabel, testView, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 12
+        stackView.spacing = 11
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
@@ -609,11 +639,11 @@ final class SwipeKeys {
             stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
             stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             testView.widthAnchor.constraint(equalToConstant: 320),
-            testView.heightAnchor.constraint(equalToConstant: 118),
+            testView.heightAnchor.constraint(equalToConstant: 104),
         ])
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 270),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -768,16 +798,17 @@ func printHelp() {
     print("""
     SwipeKeys
 
-    Turns WASD and arrow keys into trackpad-like swipe events, and Space into
-    a tap wherever the cursor is. Original key events still pass through
+    Turns WASD and arrow keys into mouse-drag swipe gestures, and Space into
+    a tap wherever the cursor is. Swipes are short drags so games that
+    accept click-and-drag input can receive them. Original key events pass through
     normally.
 
     Usage:
       swipekeys [--intensity number] [--repeats number] [--verbose]
 
     Defaults:
-      --intensity 18
-      --repeats 5
+      --intensity 170
+      --repeats 8
     """)
 }
 

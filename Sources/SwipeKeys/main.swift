@@ -14,17 +14,17 @@ enum GestureMode: String, Sendable {
 
 enum DragProfile: String, Sendable {
     case strong
-    case longer
-    case held
+    case fast
+    case turbo
 
     var settings: DragSettings {
         switch self {
         case .strong:
             DragSettings(distance: 86, steps: 6, pressDelay: 9_000, stepDelay: 3_500, restoreDelay: 1_500, tapDelay: 12_000)
-        case .longer:
-            DragSettings(distance: 120, steps: 7, pressDelay: 9_000, stepDelay: 3_500, restoreDelay: 1_500, tapDelay: 12_000)
-        case .held:
-            DragSettings(distance: 86, steps: 7, pressDelay: 16_000, stepDelay: 5_000, restoreDelay: 1_500, tapDelay: 12_000)
+        case .fast:
+            DragSettings(distance: 70, steps: 5, pressDelay: 6_000, stepDelay: 2_500, restoreDelay: 1_000, tapDelay: 10_000)
+        case .turbo:
+            DragSettings(distance: 56, steps: 4, pressDelay: 4_000, stepDelay: 1_800, restoreDelay: 800, tapDelay: 8_000)
         }
     }
 
@@ -32,10 +32,10 @@ enum DragProfile: String, Sendable {
         switch self {
         case .strong:
             "Strong"
-        case .longer:
-            "Longer"
-        case .held:
-            "Held"
+        case .fast:
+            "Fast"
+        case .turbo:
+            "Turbo"
         }
     }
 }
@@ -731,7 +731,7 @@ extension SwipeKeys: @unchecked Sendable {}
         return control
     }()
     private lazy var profileControl: NSSegmentedControl = {
-        let control = NSSegmentedControl(labels: ["Strong", "Longer", "Held"], trackingMode: .selectOne, target: self, action: #selector(changeProfile(_:)))
+        let control = NSSegmentedControl(labels: ["Strong", "Fast", "Turbo"], trackingMode: .selectOne, target: self, action: #selector(changeProfile(_:)))
         control.segmentStyle = .rounded
         control.selectedSegment = selectedSegment(for: swipeKeys.dragProfile)
         return control
@@ -1006,9 +1006,9 @@ extension SwipeKeys: @unchecked Sendable {}
         switch profile {
         case .strong:
             0
-        case .longer:
+        case .fast:
             1
-        case .held:
+        case .turbo:
             2
         }
     }
@@ -1016,9 +1016,9 @@ extension SwipeKeys: @unchecked Sendable {}
     private func profile(for segment: Int) -> DragProfile {
         switch segment {
         case 2:
-            .held
+            .turbo
         case 1:
-            .longer
+            .fast
         default:
             .strong
         }
@@ -1190,7 +1190,7 @@ func printHelp() {
       --scroll-intensity 18
       --repeats 6
 
-    The app UI also includes Strong, Longer, and Held mouse-drag profiles.
+    The app UI also includes Strong, Fast, and Turbo mouse-drag profiles.
     """)
 }
 

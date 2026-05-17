@@ -31,8 +31,8 @@ Use the mode switch to choose:
 Mouse Drag has three profiles:
 
 - `Strong`: the current best Subway Surfers City profile
-- `Longer`: more distance, same timing
-- `Held`: same distance with a slightly longer held drag
+- `Fast`: shorter and quicker than Strong
+- `Turbo`: shortest and quickest test profile
 
 Inputs are handled one at a time in a short queue so fast key presses do not
 overlap. The queue has a safety cap so accidental spam cannot build up forever,

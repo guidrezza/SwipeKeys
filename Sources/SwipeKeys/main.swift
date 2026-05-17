@@ -7,21 +7,39 @@ struct Swipe {
     let horizontal: Int32
 }
 
+enum GestureMode: String {
+    case mouseDrag
+    case scrollSwipe
+}
+
+enum InputAction {
+    case swipe(Swipe)
+    case tap
+}
+
 struct Options {
     var appMatch = "subway"
-    var intensity: Int32 = 170
-    var repeats = 8
+    var intensity: Int32 = 56
+    var scrollIntensity: Int32 = 18
+    var repeats = 5
+    var maxQueuedActions = 2
     var verbose = false
 }
 
 extension Notification.Name {
     static let swipeKeysEnabledChanged = Notification.Name("SwipeKeysEnabledChanged")
     static let swipeKeysTapStatusChanged = Notification.Name("SwipeKeysTapStatusChanged")
+    static let swipeKeysModeChanged = Notification.Name("SwipeKeysModeChanged")
 }
 
 final class SwipeKeys {
+    private static let gestureModeDefaultsKey = "GestureMode"
     private let options: Options
     private let source: CGEventSource?
+    private let actionQueue = DispatchQueue(label: "com.guidrezza.SwipeKeys.actions", qos: .userInteractive)
+    private let actionLock = NSLock()
+    private var actionRunning = false
+    private var pendingActions: [InputAction] = []
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private let tapKeyCode: Int64 = 49
@@ -29,21 +47,24 @@ final class SwipeKeys {
     private let stateLock = NSLock()
     private var enabled = true
     private var tapActive = false
+    private var mode: GestureMode
 
     private lazy var keyMap: [Int64: Swipe] = [
-        13: Swipe(vertical: -options.intensity, horizontal: 0), // W
-        126: Swipe(vertical: -options.intensity, horizontal: 0), // Up
-        1: Swipe(vertical: options.intensity, horizontal: 0), // S
-        125: Swipe(vertical: options.intensity, horizontal: 0), // Down
-        0: Swipe(vertical: 0, horizontal: -options.intensity), // A
-        123: Swipe(vertical: 0, horizontal: -options.intensity), // Left
-        2: Swipe(vertical: 0, horizontal: options.intensity), // D
-        124: Swipe(vertical: 0, horizontal: options.intensity), // Right
+        13: Swipe(vertical: -1, horizontal: 0), // W
+        126: Swipe(vertical: -1, horizontal: 0), // Up
+        1: Swipe(vertical: 1, horizontal: 0), // S
+        125: Swipe(vertical: 1, horizontal: 0), // Down
+        0: Swipe(vertical: 0, horizontal: -1), // A
+        123: Swipe(vertical: 0, horizontal: -1), // Left
+        2: Swipe(vertical: 0, horizontal: 1), // D
+        124: Swipe(vertical: 0, horizontal: 1), // Right
     ]
 
     init(options: Options) {
         self.options = options
         self.source = CGEventSource(stateID: .hidSystemState)
+        let savedMode = UserDefaults.standard.string(forKey: Self.gestureModeDefaultsKey)
+        self.mode = GestureMode(rawValue: savedMode ?? "") ?? .mouseDrag
     }
 
     static var hasAccessibilityPermission: Bool {
@@ -173,12 +194,12 @@ final class SwipeKeys {
 
     func perform(keyCode: Int64) -> Bool {
         if let swipe = keyMap[keyCode] {
-            post(swipe: swipe)
+            enqueue(.swipe(swipe))
             return true
         }
 
         if keyCode == tapKeyCode {
-            postTap()
+            enqueue(.tap)
             return true
         }
 
@@ -211,6 +232,30 @@ final class SwipeKeys {
         return newValue
     }
 
+    var gestureMode: GestureMode {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return mode
+    }
+
+    func setGestureMode(_ newMode: GestureMode) {
+        stateLock.lock()
+        guard mode != newMode else {
+            stateLock.unlock()
+            return
+        }
+
+        mode = newMode
+        stateLock.unlock()
+
+        UserDefaults.standard.set(newMode.rawValue, forKey: Self.gestureModeDefaultsKey)
+        NotificationCenter.default.post(
+            name: .swipeKeysModeChanged,
+            object: nil,
+            userInfo: ["mode": newMode.rawValue]
+        )
+    }
+
     func isToggleEvent(keyCode: Int64, flags: CGEventFlags) -> Bool {
         guard keyCode == toggleKeyCode else {
             return false
@@ -228,7 +273,63 @@ final class SwipeKeys {
         return flags.contains(.command) && flags.contains(.option) && flags.contains(.control)
     }
 
-    private func post(swipe: Swipe) {
+    private func enqueue(_ action: InputAction) {
+        actionLock.lock()
+        if actionRunning {
+            let maxQueuedActions = max(1, options.maxQueuedActions)
+            if pendingActions.count >= maxQueuedActions {
+                pendingActions[pendingActions.count - 1] = action
+            } else {
+                pendingActions.append(action)
+            }
+            actionLock.unlock()
+            return
+        }
+
+        actionRunning = true
+        actionLock.unlock()
+        runOnActionQueue(action)
+    }
+
+    private func runOnActionQueue(_ action: InputAction) {
+        actionQueue.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            self.run(action)
+            self.finishAction()
+        }
+    }
+
+    private func finishAction() {
+        actionLock.lock()
+        let next = pendingActions.isEmpty ? nil : pendingActions.removeFirst()
+        if next == nil {
+            actionRunning = false
+        }
+        actionLock.unlock()
+
+        if let next {
+            runOnActionQueue(next)
+        }
+    }
+
+    private func run(_ action: InputAction) {
+        switch action {
+        case .swipe(let swipe):
+            switch gestureMode {
+            case .mouseDrag:
+                postMouseDrag(swipe: swipe)
+            case .scrollSwipe:
+                postScrollSwipe(swipe: swipe)
+            }
+        case .tap:
+            postTap()
+        }
+    }
+
+    private func postMouseDrag(swipe: Swipe) {
         let start = targetGesturePoint()
         let end = CGPoint(
             x: start.x + direction(for: swipe.horizontal) * CGFloat(abs(options.intensity)),
@@ -239,14 +340,12 @@ final class SwipeKeys {
             print("Drag from x=\(Int(start.x)) y=\(Int(start.y)) to x=\(Int(end.x)) y=\(Int(end.y))")
         }
 
-        guard
-            let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)
-        else {
+        guard let down = mouseEvent(type: .leftMouseDown, point: start) else {
             return
         }
 
         down.post(tap: .cghidEventTap)
-        usleep(12_000)
+        usleep(7_000)
 
         for step in 1...max(1, options.repeats) {
             let progress = CGFloat(step) / CGFloat(max(1, options.repeats))
@@ -255,17 +354,58 @@ final class SwipeKeys {
                 y: start.y + (end.y - start.y) * progress
             )
 
-            guard let drag = CGEvent(mouseEventSource: source, mouseType: .leftMouseDragged, mouseCursorPosition: point, mouseButton: .left) else {
+            guard let drag = mouseEvent(type: .leftMouseDragged, point: point) else {
                 continue
             }
 
             drag.post(tap: .cghidEventTap)
-            usleep(6_000)
+            usleep(3_000)
         }
 
-        if let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left) {
+        if let up = mouseEvent(type: .leftMouseUp, point: end) {
             up.post(tap: .cghidEventTap)
         }
+
+        usleep(2_000)
+        if let move = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: start, mouseButton: .left) {
+            move.post(tap: .cghidEventTap)
+        }
+        CGWarpMouseCursorPosition(start)
+    }
+
+    private func postScrollSwipe(swipe: Swipe) {
+        let point = targetGesturePoint()
+
+        if options.verbose {
+            print("Scroll swipe vertical=\(swipe.vertical) horizontal=\(swipe.horizontal) x=\(Int(point.x)) y=\(Int(point.y))")
+        }
+
+        for _ in 0..<options.repeats {
+            guard let event = CGEvent(
+                scrollWheelEvent2Source: source,
+                units: .pixel,
+                wheelCount: 2,
+                wheel1: swipe.vertical * options.scrollIntensity,
+                wheel2: swipe.horizontal * options.scrollIntensity,
+                wheel3: 0
+            ) else {
+                continue
+            }
+
+            event.location = point
+            event.post(tap: .cghidEventTap)
+            usleep(4_500)
+        }
+    }
+
+    private func mouseEvent(type: CGEventType, point: CGPoint) -> CGEvent? {
+        guard let event = CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+            return nil
+        }
+
+        event.setIntegerValueField(.mouseEventButtonNumber, value: 0)
+        event.setIntegerValueField(.mouseEventClickState, value: 1)
+        return event
     }
 
     private func direction(for value: Int32) -> CGFloat {
@@ -321,6 +461,8 @@ final class SwipeKeys {
         return tapActive
     }
 }
+
+extension SwipeKeys: @unchecked Sendable {}
 
 @MainActor final class TestView: NSView {
     private var markerPoint: CGPoint?
@@ -443,8 +585,15 @@ final class SwipeKeys {
     private let testView = TestView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "On")
     private let readinessLabel = NSTextField(labelWithString: "Checking permissions")
+    private lazy var modeControl: NSSegmentedControl = {
+        let control = NSSegmentedControl(labels: ["Mouse Drag", "Scroll Swipe"], trackingMode: .selectOne, target: self, action: #selector(changeMode(_:)))
+        control.segmentStyle = .rounded
+        control.selectedSegment = swipeKeys.gestureMode == .mouseDrag ? 0 : 1
+        return control
+    }()
     private var enabledObserver: NSObjectProtocol?
     private var tapStatusObserver: NSObjectProtocol?
+    private var modeObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
 
     init(options: Options) {
@@ -468,6 +617,17 @@ final class SwipeKeys {
             let active = notification.userInfo?["active"] as? Bool ?? false
             Task { @MainActor [weak self, active] in
                 self?.refreshTapStatus(active)
+            }
+        }
+        self.modeObserver = NotificationCenter.default.addObserver(
+            forName: .swipeKeysModeChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            let rawMode = notification.userInfo?["mode"] as? String
+            let mode = GestureMode(rawValue: rawMode ?? "") ?? .mouseDrag
+            Task { @MainActor [weak self, mode] in
+                self?.refreshModeControl(mode)
             }
         }
     }
@@ -548,7 +708,7 @@ final class SwipeKeys {
             readinessLabel.stringValue = "Starting global listener"
             readinessLabel.textColor = .secondaryLabelColor
         } else {
-            readinessLabel.stringValue = "Ready around cursor"
+            readinessLabel.stringValue = swipeKeys.gestureMode == .mouseDrag ? "Ready · Mouse Drag" : "Ready · Scroll Swipe"
             readinessLabel.textColor = .secondaryLabelColor
         }
     }
@@ -607,6 +767,7 @@ final class SwipeKeys {
         bindingsLabel.alignment = .center
 
         testView.translatesAutoresizingMaskIntoConstraints = false
+        modeControl.translatesAutoresizingMaskIntoConstraints = false
 
         let accessibilityButton = linkButton(title: "Accessibility", action: #selector(openAccessibilitySettings))
         let inputMonitoringButton = linkButton(title: "Input Monitoring", action: #selector(openInputMonitoringSettings))
@@ -626,10 +787,10 @@ final class SwipeKeys {
         headerStack.alignment = .centerX
         headerStack.spacing = 3
 
-        let stackView = NSStackView(views: [headerStack, bindingsLabel, testView, footerStack])
+        let stackView = NSStackView(views: [headerStack, bindingsLabel, modeControl, testView, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 11
+        stackView.spacing = 10
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
@@ -640,10 +801,11 @@ final class SwipeKeys {
             stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             testView.widthAnchor.constraint(equalToConstant: 320),
             testView.heightAnchor.constraint(equalToConstant: 104),
+            modeControl.widthAnchor.constraint(equalToConstant: 230),
         ])
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 270),
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 296),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -662,6 +824,11 @@ final class SwipeKeys {
         button.font = .systemFont(ofSize: 12)
         button.contentTintColor = .secondaryLabelColor
         return button
+    }
+
+    private func refreshModeControl(_ mode: GestureMode) {
+        modeControl.selectedSegment = mode == .mouseDrag ? 0 : 1
+        refreshWindowStatus()
     }
 
     private func installLocalTestMonitor() {
@@ -708,6 +875,10 @@ final class SwipeKeys {
 
     @objc private func toggleFromMenu() {
         swipeKeys.toggle()
+    }
+
+    @objc private func changeMode(_ sender: NSSegmentedControl) {
+        swipeKeys.setGestureMode(sender.selectedSegment == 0 ? .mouseDrag : .scrollSwipe)
     }
 
     @objc private func showWindowFromMenu() {
@@ -770,6 +941,13 @@ func parseOptions(arguments: [String]) -> Options {
                 exit(2)
             }
             options.intensity = value
+        case "--scroll-intensity":
+            index += 1
+            guard index < arguments.count, let value = Int32(arguments[index]) else {
+                print("Missing numeric value for --scroll-intensity")
+                exit(2)
+            }
+            options.scrollIntensity = value
         case "--repeats":
             index += 1
             guard index < arguments.count, let value = Int(arguments[index]) else {
@@ -804,11 +982,12 @@ func printHelp() {
     normally.
 
     Usage:
-      swipekeys [--intensity number] [--repeats number] [--verbose]
+      swipekeys [--intensity pixels] [--scroll-intensity pixels] [--repeats number] [--verbose]
 
     Defaults:
-      --intensity 170
-      --repeats 8
+      --intensity 56
+      --scroll-intensity 18
+      --repeats 5
     """)
 }
 

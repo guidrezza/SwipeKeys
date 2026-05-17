@@ -23,6 +23,14 @@ SwipeKeys sends short mouse-drag gestures for swipes and a click for Space. The
 original key presses still pass through normally. Actions happen around the
 cursor.
 
+Use the mode switch to choose:
+
+- `Mouse Drag`: quick mouse-down, drag, release, then return the cursor
+- `Scroll Swipe`: the older simulated scroll swipe style
+
+Inputs are handled in a short queue so fast key presses do not overlap or build
+up forever.
+
 ## Install
 
 You need Xcode command line tools or Xcode installed.
@@ -54,7 +62,7 @@ Use the "Test here" box in the app to confirm the real bindings. Put your
 cursor inside the box, then press `WASD`, an arrow key, or Space. SwipeKeys will
 show an action only when the box receives the actual synthetic swipe or tap.
 
-The window should say `Ready around cursor` when global input is working.
+The window should say `Ready` when global input is working.
 
 Press `Command` + `Q` while SwipeKeys is focused to quit.
 

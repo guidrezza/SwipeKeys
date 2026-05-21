@@ -5,8 +5,14 @@ import Foundation
 enum SwipeKeysPalette {
     static let siteGreen = NSColor(calibratedRed: 0.31, green: 0.62, blue: 0.41, alpha: 1)
     static let siteOrange = NSColor(calibratedRed: 0.79, green: 0.45, blue: 0.22, alpha: 1)
+    static let warningRed = NSColor(calibratedRed: 0.86, green: 0.23, blue: 0.20, alpha: 1)
     static let siteText = NSColor(calibratedRed: 0.93, green: 0.92, blue: 0.90, alpha: 1)
     static let siteSecondaryText = NSColor(calibratedRed: 0.58, green: 0.57, blue: 0.57, alpha: 1)
+}
+
+enum Layout {
+    static let windowSize = NSSize(width: 360, height: 360)
+    static let testSize = NSSize(width: 240, height: 126)
 }
 
 struct Swipe: Sendable {
@@ -379,19 +385,13 @@ final class SwipeKeys {
     }
 
     var bindingsSummary: String {
-        stateLock.lock()
-        let preset = keyPreset
-        let customBindings = customBindings
-        stateLock.unlock()
-
-        switch preset {
+        switch currentKeyPreset {
         case .arrows:
-            return "Arrows swipe · Enter taps"
+            return "Arrow + Enter"
         case .wasd:
-            return "WASD swipe · Space taps"
+            return "WASD + Space"
         case .custom:
-            let tap = customBindings[.tap].map(Self.displayName(for:)) ?? "Unbound"
-            return "Custom keys · \(tap) taps"
+            return "Custom"
         }
     }
 
@@ -881,7 +881,7 @@ enum AppPage {
     private var page: AppPage = .main
     private let testView = TestView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "On")
-    private let bindingsLabel = NSTextField(labelWithString: "Arrows swipe · Enter taps")
+    private let bindingsLabel = NSTextField(labelWithString: "Arrow + Enter")
     private weak var keyPresetControl: NSSegmentedControl?
     private var customKeyButtons: [BindingSlot: NSButton] = [:]
     private var customClearButtons: [BindingSlot: NSButton] = [:]
@@ -1043,7 +1043,7 @@ enum AppPage {
         }
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 390),
+            contentRect: NSRect(origin: .zero, size: Layout.windowSize),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -1089,7 +1089,7 @@ enum AppPage {
         }
 
         window.contentView = contentView
-        window.setContentSize(NSSize(width: 420, height: 390))
+        window.setContentSize(Layout.windowSize)
         window.makeFirstResponder(page == .main ? testView : nil)
         refreshWindowStatus()
         refreshBindingsStatus()
@@ -1099,54 +1099,62 @@ enum AppPage {
         let titleLabel = NSTextField(labelWithString: "SwipeKeys")
         titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
         titleLabel.alignment = .center
-        titleLabel.textColor = SwipeKeysPalette.siteText
+        titleLabel.textColor = SwipeKeysPalette.siteOrange
 
         statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         statusLabel.alignment = .center
 
         bindingsLabel.font = .systemFont(ofSize: 14, weight: .medium)
-        bindingsLabel.alignment = .center
+        bindingsLabel.alignment = .right
         bindingsLabel.textColor = SwipeKeysPalette.siteText
 
         testView.translatesAutoresizingMaskIntoConstraints = false
 
-        let permissionsButton = footerButton(title: "Permissions", action: #selector(showPermissionsPage))
-        self.permissionsButton = permissionsButton
-        let keysButton = footerButton(title: "Keys", action: #selector(showKeysPage))
+        let editButton = linkButton(title: "Edit", action: #selector(showKeysPage))
+        editButton.font = .systemFont(ofSize: 13, weight: .semibold)
 
-        let toggleLabel = NSTextField(labelWithString: "Command + Control + Option + K toggles")
+        let bindingsStack = NSStackView(views: [bindingsLabel, editButton])
+        bindingsStack.orientation = .horizontal
+        bindingsStack.alignment = .centerY
+        bindingsStack.spacing = 10
+
+        let permissionsButton = pageButton(title: "Permissions", action: #selector(showPermissionsPage))
+        self.permissionsButton = permissionsButton
+
+        let toggleLabel = NSTextField(labelWithString: "Toggle: ⌘⌃⌥K")
         toggleLabel.font = .systemFont(ofSize: 12)
         toggleLabel.textColor = SwipeKeysPalette.siteSecondaryText
         toggleLabel.alignment = .center
 
-        let footerStack = NSStackView(views: [toggleLabel, permissionsButton, keysButton])
+        let footerStack = NSStackView(views: [toggleLabel, permissionsButton])
         footerStack.orientation = .horizontal
         footerStack.alignment = .centerY
         footerStack.spacing = 12
 
-        let headerStack = NSStackView(views: [statusLabel, titleLabel])
+        let headerStack = NSStackView(views: [titleLabel, statusLabel])
         headerStack.orientation = .horizontal
         headerStack.alignment = .centerY
         headerStack.spacing = 10
 
-        let stackView = NSStackView(views: [headerStack, bindingsLabel, testView, footerStack])
+        let stackView = NSStackView(views: [headerStack, bindingsStack, testView, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 14
+        stackView.spacing = 12
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
             stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            testView.widthAnchor.constraint(equalToConstant: 336),
-            testView.heightAnchor.constraint(equalToConstant: 170),
+            bindingsStack.widthAnchor.constraint(equalToConstant: 240),
+            testView.widthAnchor.constraint(equalToConstant: Layout.testSize.width),
+            testView.heightAnchor.constraint(equalToConstant: Layout.testSize.height),
         ])
     }
 
-    private func footerButton(title: String, action: Selector) -> NSButton {
+    private func linkButton(title: String, action: Selector) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
         button.isBordered = false
         button.font = .systemFont(ofSize: 12)
@@ -1162,28 +1170,43 @@ enum AppPage {
         return button
     }
 
+    private func setButtonTitle(_ title: String, color: NSColor, on button: NSButton?) {
+        guard let button else {
+            return
+        }
+
+        button.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: button.font ?? NSFont.systemFont(ofSize: 13),
+                .foregroundColor: color,
+            ]
+        )
+    }
+
     private func makeTitle(_ title: String) -> NSTextField {
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
-        titleLabel.textColor = SwipeKeysPalette.siteText
+        titleLabel.textColor = SwipeKeysPalette.siteOrange
         titleLabel.alignment = .center
         return titleLabel
     }
 
     private func buildPageHeader(title: String, in contentView: NSView) -> NSStackView {
-        let backButton = footerButton(title: "Back", action: #selector(showMainPage))
+        let backButton = pageButton(title: "Back", action: #selector(showMainPage))
+        backButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
         let titleLabel = makeTitle(title)
 
         let header = NSStackView(views: [backButton, titleLabel])
         header.orientation = .horizontal
         header.alignment = .centerY
-        header.spacing = 64
+        header.spacing = 34
         header.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(header)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 26),
-            header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 26),
+            header.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
+            header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
         ])
 
         return header
@@ -1232,15 +1255,15 @@ enum AppPage {
         let stackView = NSStackView(views: [keyPresetControl, customStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 18
+        stackView.spacing = 14
         stackView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: 20),
-            keyPresetControl.widthAnchor.constraint(equalToConstant: 250),
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
+            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: 22),
+            keyPresetControl.widthAnchor.constraint(equalToConstant: 236),
         ])
     }
 
@@ -1266,8 +1289,8 @@ enum AppPage {
         contentView.addSubview(stackView)
 
         NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 34),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -34),
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 28),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -28),
             stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: 8),
         ])
     }
@@ -1313,15 +1336,16 @@ enum AppPage {
         let inputReady = SwipeKeys.hasInputMonitoringPermission
         let ready = accessibilityReady && inputReady
 
-        permissionsButton?.contentTintColor = SwipeKeysPalette.siteOrange
-        permissionsButton?.isBordered = !ready
+        setButtonTitle("Permissions", color: ready ? SwipeKeysPalette.siteText : SwipeKeysPalette.warningRed, on: permissionsButton)
+        permissionsButton?.contentTintColor = ready ? SwipeKeysPalette.siteText : SwipeKeysPalette.warningRed
+        permissionsButton?.isBordered = true
         permissionsButton?.bezelStyle = .rounded
 
         accessibilityStateLabel?.stringValue = accessibilityReady ? "Ready" : "Missing"
-        accessibilityStateLabel?.textColor = accessibilityReady ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.siteOrange
+        accessibilityStateLabel?.textColor = accessibilityReady ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.warningRed
 
         inputMonitoringStateLabel?.stringValue = inputReady ? "Ready" : "Missing"
-        inputMonitoringStateLabel?.textColor = inputReady ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.siteOrange
+        inputMonitoringStateLabel?.textColor = inputReady ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.warningRed
     }
 
     private func selectedSegment(for preset: KeyPreset) -> Int {

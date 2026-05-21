@@ -17,7 +17,7 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 
 Actions happen around the cursor. Original key presses still pass through.
 
-Use `Keys` to switch to `WASD` + Space or set custom bindings. Use
+Use `Edit` to switch to `WASD` + Space or set custom bindings. Use
 `Permissions` to check Accessibility and Input Monitoring.
 
 ## Install

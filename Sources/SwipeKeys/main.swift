@@ -2,14 +2,16 @@ import AppKit
 import CoreGraphics
 import Foundation
 
+enum SwipeKeysPalette {
+    static let siteGreen = NSColor(calibratedRed: 0.31, green: 0.62, blue: 0.41, alpha: 1)
+    static let siteOrange = NSColor(calibratedRed: 0.79, green: 0.45, blue: 0.22, alpha: 1)
+    static let siteText = NSColor(calibratedRed: 0.93, green: 0.92, blue: 0.90, alpha: 1)
+    static let siteSecondaryText = NSColor(calibratedRed: 0.58, green: 0.57, blue: 0.57, alpha: 1)
+}
+
 struct Swipe: Sendable {
     let vertical: Int32
     let horizontal: Int32
-}
-
-enum GestureMode: String, Sendable {
-    case mouseDrag
-    case scrollSwipe
 }
 
 enum KeyPreset: String, Sendable {
@@ -95,9 +97,7 @@ struct QueuedAction: Sendable {
 }
 
 struct Options {
-    var appMatch = "subway"
     var intensity: Int32 = 86
-    var scrollIntensity: Int32 = 18
     var repeats = 6
     var maxQueuedActions = 8
     var usesCustomDragSettings = false
@@ -107,12 +107,10 @@ struct Options {
 extension Notification.Name {
     static let swipeKeysEnabledChanged = Notification.Name("SwipeKeysEnabledChanged")
     static let swipeKeysTapStatusChanged = Notification.Name("SwipeKeysTapStatusChanged")
-    static let swipeKeysModeChanged = Notification.Name("SwipeKeysModeChanged")
     static let swipeKeysBindingsChanged = Notification.Name("SwipeKeysBindingsChanged")
 }
 
 final class SwipeKeys {
-    private static let gestureModeDefaultsKey = "GestureMode"
     private static let keyPresetDefaultsKey = "KeyPreset"
     private static let customKeyPrefix = "CustomKey."
     private static let arrowBindings: [BindingSlot: Int64] = [
@@ -150,15 +148,12 @@ final class SwipeKeys {
     private let stateLock = NSLock()
     private var enabled = true
     private var tapActive = false
-    private var mode: GestureMode
     private var keyPreset: KeyPreset
     private var customBindings: [BindingSlot: Int64]
 
     init(options: Options) {
         self.options = options
         self.source = CGEventSource(stateID: .hidSystemState)
-        let savedMode = UserDefaults.standard.string(forKey: Self.gestureModeDefaultsKey)
-        self.mode = GestureMode(rawValue: savedMode ?? "") ?? .mouseDrag
         let savedPreset = UserDefaults.standard.string(forKey: Self.keyPresetDefaultsKey)
         self.keyPreset = KeyPreset(rawValue: savedPreset ?? "") ?? .arrows
         self.customBindings = Self.loadCustomBindings()
@@ -324,30 +319,6 @@ final class SwipeKeys {
         )
 
         return newValue
-    }
-
-    var gestureMode: GestureMode {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return mode
-    }
-
-    func setGestureMode(_ newMode: GestureMode) {
-        stateLock.lock()
-        guard mode != newMode else {
-            stateLock.unlock()
-            return
-        }
-
-        mode = newMode
-        stateLock.unlock()
-
-        UserDefaults.standard.set(newMode.rawValue, forKey: Self.gestureModeDefaultsKey)
-        NotificationCenter.default.post(
-            name: .swipeKeysModeChanged,
-            object: nil,
-            userInfo: ["mode": newMode.rawValue]
-        )
     }
 
     var currentKeyPreset: KeyPreset {
@@ -528,12 +499,7 @@ final class SwipeKeys {
 
         switch queuedAction.action {
         case .swipe(let swipe):
-            switch gestureMode {
-            case .mouseDrag:
-                postMouseDrag(swipe: swipe, generation: queuedAction.generation)
-            case .scrollSwipe:
-                postScrollSwipe(swipe: swipe, generation: queuedAction.generation)
-            }
+            postMouseDrag(swipe: swipe, generation: queuedAction.generation)
         case .tap:
             postTap(generation: queuedAction.generation)
         }
@@ -598,35 +564,6 @@ final class SwipeKeys {
         }
 
         restoreCursor(to: start, delay: settings.restoreDelay)
-    }
-
-    private func postScrollSwipe(swipe: Swipe, generation: Int) {
-        let point = targetGesturePoint()
-
-        if options.verbose {
-            print("Scroll swipe vertical=\(swipe.vertical) horizontal=\(swipe.horizontal) x=\(Int(point.x)) y=\(Int(point.y))")
-        }
-
-        for _ in 0..<options.repeats {
-            guard shouldContinueAction(generation) else {
-                return
-            }
-
-            guard let event = CGEvent(
-                scrollWheelEvent2Source: source,
-                units: .pixel,
-                wheelCount: 2,
-                wheel1: swipe.vertical * options.scrollIntensity,
-                wheel2: swipe.horizontal * options.scrollIntensity,
-                wheel3: 0
-            ) else {
-                continue
-            }
-
-            event.location = point
-            event.post(tap: .cghidEventTap)
-            usleep(2_000)
-        }
     }
 
     private func restoreCursor(to point: CGPoint, delay: useconds_t) {
@@ -856,17 +793,6 @@ extension SwipeKeys: @unchecked Sendable {}
         showDelivered(action: "drag", eventLocation: event.locationInWindow)
     }
 
-    override func scrollWheel(with event: NSEvent) {
-        let action: String
-        if abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX) {
-            action = event.scrollingDeltaY > 0 ? "swipe up" : "swipe down"
-        } else {
-            action = event.scrollingDeltaX > 0 ? "swipe right" : "swipe left"
-        }
-
-        showDelivered(action: action, eventLocation: event.locationInWindow)
-    }
-
     private func showDelivered(action: String, eventLocation: CGPoint) {
         let localPoint = convert(eventLocation, from: nil)
         guard bounds.contains(localPoint) else {
@@ -903,10 +829,10 @@ extension SwipeKeys: @unchecked Sendable {}
         paragraph.alignment = .center
 
         if let markerPoint, Date().timeIntervalSince(markerDate) < 5 {
-            NSColor.systemBlue.withAlphaComponent(0.18).setFill()
+            SwipeKeysPalette.siteGreen.withAlphaComponent(0.20).setFill()
             NSBezierPath(ovalIn: NSRect(x: markerPoint.x - 24, y: markerPoint.y - 24, width: 48, height: 48)).fill()
 
-            NSColor.systemBlue.setFill()
+            SwipeKeysPalette.siteGreen.setFill()
             NSBezierPath(ovalIn: NSRect(x: markerPoint.x - 6, y: markerPoint.y - 6, width: 12, height: 12)).fill()
 
             markerLabel.draw(
@@ -940,35 +866,31 @@ extension SwipeKeys: @unchecked Sendable {}
 
 }
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
+enum AppPage {
+    case main
+    case keys
+    case permissions
+}
+
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let swipeKeys: SwipeKeys
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private var permissionTimer: Timer?
     private var isRunning = false
     private var window: NSWindow?
-    private var keyOptionsWindow: NSWindow?
+    private var page: AppPage = .main
     private let testView = TestView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "On")
-    private let readinessLabel = NSTextField(labelWithString: "Checking permissions")
     private let bindingsLabel = NSTextField(labelWithString: "Arrows swipe · Enter taps")
-    private lazy var modeControl: NSSegmentedControl = {
-        let control = NSSegmentedControl(labels: ["Mouse Drag", "Scroll Swipe"], trackingMode: .selectOne, target: self, action: #selector(changeMode(_:)))
-        control.segmentStyle = .rounded
-        control.selectedSegment = swipeKeys.gestureMode == .mouseDrag ? 0 : 1
-        return control
-    }()
-    private lazy var keyPresetControl: NSSegmentedControl = {
-        let control = NSSegmentedControl(labels: ["Arrows", "WASD", "Custom"], trackingMode: .selectOne, target: self, action: #selector(changeKeyPreset(_:)))
-        control.segmentStyle = .rounded
-        control.selectedSegment = selectedSegment(for: swipeKeys.currentKeyPreset)
-        return control
-    }()
+    private weak var keyPresetControl: NSSegmentedControl?
     private var customKeyButtons: [BindingSlot: NSButton] = [:]
     private var customClearButtons: [BindingSlot: NSButton] = [:]
     private var captureSlot: BindingSlot?
+    private weak var permissionsButton: NSButton?
+    private weak var accessibilityStateLabel: NSTextField?
+    private weak var inputMonitoringStateLabel: NSTextField?
     private var enabledObserver: NSObjectProtocol?
     private var tapStatusObserver: NSObjectProtocol?
-    private var modeObserver: NSObjectProtocol?
     private var bindingsObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
 
@@ -995,17 +917,6 @@ extension SwipeKeys: @unchecked Sendable {}
                 self?.refreshTapStatus(active)
             }
         }
-        self.modeObserver = NotificationCenter.default.addObserver(
-            forName: .swipeKeysModeChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] notification in
-            let rawMode = notification.userInfo?["mode"] as? String
-            let mode = GestureMode(rawValue: rawMode ?? "") ?? .mouseDrag
-            Task { @MainActor [weak self, mode] in
-                self?.refreshModeControl(mode)
-            }
-        }
         self.bindingsObserver = NotificationCenter.default.addObserver(
             forName: .swipeKeysBindingsChanged,
             object: nil,
@@ -1019,6 +930,7 @@ extension SwipeKeys: @unchecked Sendable {}
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        ProcessInfo.processInfo.disableAutomaticTermination("SwipeKeys keeps the keyboard listener available.")
 
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "SwipeKeys")
@@ -1031,8 +943,20 @@ extension SwipeKeys: @unchecked Sendable {}
         startIfAllowed()
         refreshEnabledStatus(swipeKeys.isEnabled)
         refreshTapStatus(swipeKeys.isTapActive)
-        refreshBindingsStatus()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            page = .main
+            showWindow()
+        }
+
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     private func startIfAllowed() {
@@ -1074,29 +998,11 @@ extension SwipeKeys: @unchecked Sendable {}
     }
 
     private func refreshWindowStatus() {
-        let accessibilityReady = SwipeKeys.hasAccessibilityPermission
-        let inputReady = SwipeKeys.hasInputMonitoringPermission
         let enabled = swipeKeys.isEnabled
 
         statusLabel.stringValue = enabled ? "On" : "Off"
-        statusLabel.textColor = enabled ? .systemGreen : .secondaryLabelColor
-
-        if !accessibilityReady && !inputReady {
-            readinessLabel.stringValue = "Needs Accessibility + Input Monitoring"
-            readinessLabel.textColor = .systemOrange
-        } else if !accessibilityReady {
-            readinessLabel.stringValue = "Needs Accessibility"
-            readinessLabel.textColor = .systemOrange
-        } else if !inputReady {
-            readinessLabel.stringValue = "Needs Input Monitoring"
-            readinessLabel.textColor = .systemOrange
-        } else if !swipeKeys.isTapActive {
-            readinessLabel.stringValue = "Starting global listener"
-            readinessLabel.textColor = .secondaryLabelColor
-        } else {
-            readinessLabel.stringValue = swipeKeys.gestureMode == .mouseDrag ? "Ready · Mouse Drag" : "Ready · Scroll Swipe"
-            readinessLabel.textColor = .secondaryLabelColor
-        }
+        statusLabel.textColor = enabled ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.siteSecondaryText
+        refreshPermissionIndicators()
     }
 
     private func refreshStatus() {
@@ -1132,51 +1038,101 @@ extension SwipeKeys: @unchecked Sendable {}
     private func showWindow() {
         if let window {
             window.makeKeyAndOrderFront(nil)
+            renderCurrentPage()
             return
         }
 
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 390),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "SwipeKeys"
+        window.backgroundColor = NSColor(calibratedRed: 0.08, green: 0.08, blue: 0.08, alpha: 1)
+        window.delegate = self
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        self.window = window
+        renderCurrentPage()
+    }
+
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        sender.orderOut(nil)
+        return false
+    }
+
+    private func renderCurrentPage() {
+        guard let window else {
+            return
+        }
+
+        captureSlot = page == .keys ? captureSlot : nil
+        customKeyButtons.removeAll()
+        customClearButtons.removeAll()
+        permissionsButton = nil
+        accessibilityStateLabel = nil
+        inputMonitoringStateLabel = nil
+
         let contentView = NSView()
         contentView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.wantsLayer = true
+        contentView.layer?.backgroundColor = NSColor(calibratedRed: 0.08, green: 0.08, blue: 0.08, alpha: 1).cgColor
 
+        switch page {
+        case .main:
+            buildMainPage(in: contentView)
+        case .keys:
+            buildKeysPage(in: contentView)
+        case .permissions:
+            buildPermissionsPage(in: contentView)
+        }
+
+        window.contentView = contentView
+        window.setContentSize(NSSize(width: 420, height: 390))
+        window.makeFirstResponder(page == .main ? testView : nil)
+        refreshWindowStatus()
+        refreshBindingsStatus()
+    }
+
+    private func buildMainPage(in contentView: NSView) {
         let titleLabel = NSTextField(labelWithString: "SwipeKeys")
         titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
         titleLabel.alignment = .center
+        titleLabel.textColor = SwipeKeysPalette.siteText
 
         statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         statusLabel.alignment = .center
 
-        readinessLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        readinessLabel.alignment = .center
-
         bindingsLabel.font = .systemFont(ofSize: 14, weight: .medium)
         bindingsLabel.alignment = .center
+        bindingsLabel.textColor = SwipeKeysPalette.siteText
 
         testView.translatesAutoresizingMaskIntoConstraints = false
-        modeControl.translatesAutoresizingMaskIntoConstraints = false
 
-        let keysButton = linkButton(title: "Keys", action: #selector(showKeyOptions))
-        let accessibilityButton = linkButton(title: "Accessibility", action: #selector(openAccessibilitySettings))
-        let inputMonitoringButton = linkButton(title: "Input Monitoring", action: #selector(openInputMonitoringSettings))
+        let permissionsButton = footerButton(title: "Permissions", action: #selector(showPermissionsPage))
+        self.permissionsButton = permissionsButton
+        let keysButton = footerButton(title: "Keys", action: #selector(showKeysPage))
 
-        let toggleLabel = NSTextField(labelWithString: "⌘⌃⌥K toggles")
+        let toggleLabel = NSTextField(labelWithString: "Command + Control + Option + K toggles")
         toggleLabel.font = .systemFont(ofSize: 12)
-        toggleLabel.textColor = .tertiaryLabelColor
+        toggleLabel.textColor = SwipeKeysPalette.siteSecondaryText
         toggleLabel.alignment = .center
 
-        let footerStack = NSStackView(views: [toggleLabel, keysButton, accessibilityButton, inputMonitoringButton])
+        let footerStack = NSStackView(views: [toggleLabel, permissionsButton, keysButton])
         footerStack.orientation = .horizontal
         footerStack.alignment = .centerY
         footerStack.spacing = 12
 
-        let headerStack = NSStackView(views: [titleLabel, statusLabel, readinessLabel])
-        headerStack.orientation = .vertical
-        headerStack.alignment = .centerX
-        headerStack.spacing = 3
+        let headerStack = NSStackView(views: [statusLabel, titleLabel])
+        headerStack.orientation = .horizontal
+        headerStack.alignment = .centerY
+        headerStack.spacing = 10
 
-        let stackView = NSStackView(views: [headerStack, bindingsLabel, modeControl, testView, footerStack])
+        let stackView = NSStackView(views: [headerStack, bindingsLabel, testView, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 10
+        stackView.spacing = 14
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
@@ -1185,42 +1141,161 @@ extension SwipeKeys: @unchecked Sendable {}
             stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
             stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
             stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            testView.widthAnchor.constraint(equalToConstant: 320),
-            testView.heightAnchor.constraint(equalToConstant: 150),
-            modeControl.widthAnchor.constraint(equalToConstant: 230),
+            testView.widthAnchor.constraint(equalToConstant: 336),
+            testView.heightAnchor.constraint(equalToConstant: 170),
         ])
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 420, height: 350),
-            styleMask: [.titled, .closable, .miniaturizable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "SwipeKeys"
-        window.contentView = contentView
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(testView)
-        self.window = window
-        refreshModeControl(swipeKeys.gestureMode)
     }
 
-    private func linkButton(title: String, action: Selector) -> NSButton {
+    private func footerButton(title: String, action: Selector) -> NSButton {
         let button = NSButton(title: title, target: self, action: action)
         button.isBordered = false
         button.font = .systemFont(ofSize: 12)
-        button.contentTintColor = .secondaryLabelColor
+        button.contentTintColor = SwipeKeysPalette.siteOrange
         return button
     }
 
-    private func refreshModeControl(_ mode: GestureMode) {
-        modeControl.selectedSegment = mode == .mouseDrag ? 0 : 1
-        refreshWindowStatus()
+    private func pageButton(title: String, action: Selector) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.bezelStyle = .rounded
+        button.font = .systemFont(ofSize: 13)
+        button.contentTintColor = SwipeKeysPalette.siteOrange
+        return button
+    }
+
+    private func makeTitle(_ title: String) -> NSTextField {
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
+        titleLabel.textColor = SwipeKeysPalette.siteText
+        titleLabel.alignment = .center
+        return titleLabel
+    }
+
+    private func buildPageHeader(title: String, in contentView: NSView) -> NSStackView {
+        let backButton = footerButton(title: "Back", action: #selector(showMainPage))
+        let titleLabel = makeTitle(title)
+
+        let header = NSStackView(views: [backButton, titleLabel])
+        header.orientation = .horizontal
+        header.alignment = .centerY
+        header.spacing = 64
+        header.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(header)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 26),
+            header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 26),
+        ])
+
+        return header
+    }
+
+    private func buildKeysPage(in contentView: NSView) {
+        _ = buildPageHeader(title: "Keys", in: contentView)
+
+        let keyPresetControl = NSSegmentedControl(labels: ["Arrows", "WASD", "Custom"], trackingMode: .selectOne, target: self, action: #selector(changeKeyPreset(_:)))
+        keyPresetControl.segmentStyle = .rounded
+        keyPresetControl.selectedSegment = selectedSegment(for: swipeKeys.currentKeyPreset)
+        keyPresetControl.translatesAutoresizingMaskIntoConstraints = false
+        self.keyPresetControl = keyPresetControl
+
+        let customStack = NSStackView()
+        customStack.orientation = .vertical
+        customStack.alignment = .leading
+        customStack.spacing = 8
+        customStack.translatesAutoresizingMaskIntoConstraints = false
+
+        for slot in BindingSlot.allCases {
+            let label = NSTextField(labelWithString: slot.title)
+            label.font = .systemFont(ofSize: 13, weight: .medium)
+            label.textColor = SwipeKeysPalette.siteText
+            label.widthAnchor.constraint(equalToConstant: 52).isActive = true
+
+            let keyButton = NSButton(title: "Unbound", target: self, action: #selector(beginCustomKeyCapture(_:)))
+            keyButton.bezelStyle = .rounded
+            keyButton.tag = slot.index
+            keyButton.widthAnchor.constraint(equalToConstant: 128).isActive = true
+            customKeyButtons[slot] = keyButton
+
+            let clearButton = NSButton(title: "Clear", target: self, action: #selector(clearCustomKey(_:)))
+            clearButton.bezelStyle = .rounded
+            clearButton.tag = slot.index
+            clearButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
+            customClearButtons[slot] = clearButton
+
+            let row = NSStackView(views: [label, keyButton, clearButton])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 10
+            customStack.addArrangedSubview(row)
+        }
+
+        let stackView = NSStackView(views: [keyPresetControl, customStack])
+        stackView.orientation = .vertical
+        stackView.alignment = .centerX
+        stackView.spacing = 18
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
+            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: 20),
+            keyPresetControl.widthAnchor.constraint(equalToConstant: 250),
+        ])
+    }
+
+    private func buildPermissionsPage(in contentView: NSView) {
+        _ = buildPageHeader(title: "Permissions", in: contentView)
+
+        let accessibilityRow = permissionRow(
+            title: "Accessibility",
+            stateLabelSetter: { self.accessibilityStateLabel = $0 },
+            action: #selector(openAccessibilitySettings)
+        )
+        let inputMonitoringRow = permissionRow(
+            title: "Input Monitoring",
+            stateLabelSetter: { self.inputMonitoringStateLabel = $0 },
+            action: #selector(openInputMonitoringSettings)
+        )
+
+        let stackView = NSStackView(views: [accessibilityRow, inputMonitoringRow])
+        stackView.orientation = .vertical
+        stackView.alignment = .centerX
+        stackView.spacing = 14
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 34),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -34),
+            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: 8),
+        ])
+    }
+
+    private func permissionRow(title: String, stateLabelSetter: (NSTextField) -> Void, action: Selector) -> NSStackView {
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = .systemFont(ofSize: 14, weight: .medium)
+        titleLabel.textColor = SwipeKeysPalette.siteText
+        titleLabel.widthAnchor.constraint(equalToConstant: 130).isActive = true
+
+        let stateLabel = NSTextField(labelWithString: "Checking")
+        stateLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        stateLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        stateLabelSetter(stateLabel)
+
+        let openButton = pageButton(title: "Open", action: action)
+        openButton.widthAnchor.constraint(equalToConstant: 74).isActive = true
+
+        let row = NSStackView(views: [titleLabel, stateLabel, openButton])
+        row.orientation = .horizontal
+        row.alignment = .centerY
+        row.spacing = 12
+        return row
     }
 
     private func refreshBindingsStatus() {
         bindingsLabel.stringValue = swipeKeys.bindingsSummary
-        keyPresetControl.selectedSegment = selectedSegment(for: swipeKeys.currentKeyPreset)
+        keyPresetControl?.selectedSegment = selectedSegment(for: swipeKeys.currentKeyPreset)
 
         let customEnabled = swipeKeys.currentKeyPreset == .custom
         for slot in BindingSlot.allCases {
@@ -1231,6 +1306,22 @@ extension SwipeKeys: @unchecked Sendable {}
             customKeyButtons[slot]?.isEnabled = customEnabled
             customClearButtons[slot]?.isEnabled = customEnabled && customKeyCode != nil
         }
+    }
+
+    private func refreshPermissionIndicators() {
+        let accessibilityReady = SwipeKeys.hasAccessibilityPermission
+        let inputReady = SwipeKeys.hasInputMonitoringPermission
+        let ready = accessibilityReady && inputReady
+
+        permissionsButton?.contentTintColor = SwipeKeysPalette.siteOrange
+        permissionsButton?.isBordered = !ready
+        permissionsButton?.bezelStyle = .rounded
+
+        accessibilityStateLabel?.stringValue = accessibilityReady ? "Ready" : "Missing"
+        accessibilityStateLabel?.textColor = accessibilityReady ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.siteOrange
+
+        inputMonitoringStateLabel?.stringValue = inputReady ? "Ready" : "Missing"
+        inputMonitoringStateLabel?.textColor = inputReady ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.siteOrange
     }
 
     private func selectedSegment(for preset: KeyPreset) -> Int {
@@ -1253,81 +1344,6 @@ extension SwipeKeys: @unchecked Sendable {}
         default:
             .arrows
         }
-    }
-
-    @objc private func showKeyOptions() {
-        if let keyOptionsWindow {
-            keyOptionsWindow.makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-            return
-        }
-
-        let contentView = NSView()
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-
-        let titleLabel = NSTextField(labelWithString: "Key Options")
-        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
-        titleLabel.alignment = .center
-
-        keyPresetControl.translatesAutoresizingMaskIntoConstraints = false
-
-        let customStack = NSStackView()
-        customStack.orientation = .vertical
-        customStack.alignment = .leading
-        customStack.spacing = 8
-        customStack.translatesAutoresizingMaskIntoConstraints = false
-
-        for slot in BindingSlot.allCases {
-            let label = NSTextField(labelWithString: slot.title)
-            label.font = .systemFont(ofSize: 13, weight: .medium)
-            label.widthAnchor.constraint(equalToConstant: 52).isActive = true
-
-            let keyButton = NSButton(title: "Unbound", target: self, action: #selector(beginCustomKeyCapture(_:)))
-            keyButton.bezelStyle = .rounded
-            keyButton.tag = slot.index
-            keyButton.widthAnchor.constraint(equalToConstant: 128).isActive = true
-            customKeyButtons[slot] = keyButton
-
-            let clearButton = NSButton(title: "Clear", target: self, action: #selector(clearCustomKey(_:)))
-            clearButton.bezelStyle = .rounded
-            clearButton.tag = slot.index
-            clearButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
-            customClearButtons[slot] = clearButton
-
-            let row = NSStackView(views: [label, keyButton, clearButton])
-            row.orientation = .horizontal
-            row.alignment = .centerY
-            row.spacing = 10
-            customStack.addArrangedSubview(row)
-        }
-
-        let stackView = NSStackView(views: [titleLabel, keyPresetControl, customStack])
-        stackView.orientation = .vertical
-        stackView.alignment = .centerX
-        stackView.spacing = 16
-        stackView.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(stackView)
-
-        NSLayoutConstraint.activate([
-            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
-            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
-            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            keyPresetControl.widthAnchor.constraint(equalToConstant: 250),
-        ])
-
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 360, height: 310),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        window.title = "Key Options"
-        window.contentView = contentView
-        window.center()
-        window.makeKeyAndOrderFront(nil)
-        self.keyOptionsWindow = window
-        refreshBindingsStatus()
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func installLocalTestMonitor() {
@@ -1387,10 +1403,6 @@ extension SwipeKeys: @unchecked Sendable {}
         swipeKeys.toggle()
     }
 
-    @objc private func changeMode(_ sender: NSSegmentedControl) {
-        swipeKeys.setGestureMode(sender.selectedSegment == 0 ? .mouseDrag : .scrollSwipe)
-    }
-
     @objc private func changeKeyPreset(_ sender: NSSegmentedControl) {
         captureSlot = nil
         swipeKeys.setKeyPreset(keyPreset(for: sender.selectedSegment))
@@ -1408,7 +1420,7 @@ extension SwipeKeys: @unchecked Sendable {}
 
         captureSlot = slot
         refreshBindingsStatus()
-        keyOptionsWindow?.makeFirstResponder(sender)
+        window?.makeFirstResponder(sender)
     }
 
     @objc private func clearCustomKey(_ sender: NSButton) {
@@ -1424,6 +1436,21 @@ extension SwipeKeys: @unchecked Sendable {}
     @objc private func showWindowFromMenu() {
         showWindow()
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func showMainPage() {
+        page = .main
+        renderCurrentPage()
+    }
+
+    @objc private func showKeysPage() {
+        page = .keys
+        renderCurrentPage()
+    }
+
+    @objc private func showPermissionsPage() {
+        page = .permissions
+        renderCurrentPage()
     }
 
     @objc private func openAccessibilitySettings() {
@@ -1467,13 +1494,6 @@ func parseOptions(arguments: [String]) -> Options {
         let argument = arguments[index]
 
         switch argument {
-        case "--match":
-            index += 1
-            guard index < arguments.count else {
-                print("Missing value for --match")
-                exit(2)
-            }
-            options.appMatch = arguments[index]
         case "--intensity":
             index += 1
             guard index < arguments.count, let value = Int32(arguments[index]) else {
@@ -1482,13 +1502,6 @@ func parseOptions(arguments: [String]) -> Options {
             }
             options.intensity = value
             options.usesCustomDragSettings = true
-        case "--scroll-intensity":
-            index += 1
-            guard index < arguments.count, let value = Int32(arguments[index]) else {
-                print("Missing numeric value for --scroll-intensity")
-                exit(2)
-            }
-            options.scrollIntensity = value
         case "--repeats":
             index += 1
             guard index < arguments.count, let value = Int(arguments[index]) else {
@@ -1523,11 +1536,10 @@ func printHelp() {
     through normally.
 
     Usage:
-      swipekeys [--intensity pixels] [--scroll-intensity pixels] [--repeats number] [--verbose]
+      swipekeys [--intensity pixels] [--repeats number] [--verbose]
 
     Defaults:
       --intensity 86
-      --scroll-intensity 18
       --repeats 6
 
     """)

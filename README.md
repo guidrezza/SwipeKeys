@@ -17,7 +17,8 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 
 Actions happen around the cursor. Original key presses still pass through.
 
-Use `Keys` in the app to switch to `WASD` + Space or set custom bindings.
+Use `Keys` to switch to `WASD` + Space or set custom bindings. Use
+`Permissions` to check Accessibility and Input Monitoring.
 
 ## Install
 
@@ -29,8 +30,8 @@ SwipeKeys needs:
 - Accessibility
 - Input Monitoring
 
-Open SwipeKeys, click the permission buttons, enable both in System Settings,
-then reopen the app if macOS asks.
+Open SwipeKeys, click `Permissions`, enable both in System Settings, then reopen
+the app if macOS asks.
 
 ## Build
 

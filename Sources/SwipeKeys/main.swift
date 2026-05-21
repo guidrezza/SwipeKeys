@@ -11,8 +11,8 @@ enum SwipeKeysPalette {
 }
 
 enum Layout {
-    static let windowSize = NSSize(width: 360, height: 360)
-    static let testSize = NSSize(width: 240, height: 126)
+    static let windowSize = NSSize(width: 360, height: 300)
+    static let testSize = NSSize(width: 240, height: 104)
 }
 
 struct Swipe: Sendable {
@@ -769,6 +769,7 @@ extension SwipeKeys: @unchecked Sendable {}
     private var markerPoint: CGPoint?
     private var markerLabel = "Test here"
     private var markerDate = Date.distantPast
+    private var dragStartPoint: CGPoint?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -786,11 +787,24 @@ extension SwipeKeys: @unchecked Sendable {}
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
+        dragStartPoint = convert(event.locationInWindow, from: nil)
         showDelivered(action: "tap", eventLocation: event.locationInWindow)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        showDelivered(action: "drag", eventLocation: event.locationInWindow)
+        let localPoint = convert(event.locationInWindow, from: nil)
+        let startPoint = dragStartPoint ?? localPoint
+        let deltaX = localPoint.x - startPoint.x
+        let deltaY = localPoint.y - startPoint.y
+        let direction: String
+
+        if abs(deltaX) >= abs(deltaY) {
+            direction = deltaX >= 0 ? "right" : "left"
+        } else {
+            direction = deltaY >= 0 ? "up" : "down"
+        }
+
+        showDelivered(action: "drag \(direction)", eventLocation: event.locationInWindow)
     }
 
     private func showDelivered(action: String, eventLocation: CGPoint) {
@@ -800,7 +814,7 @@ extension SwipeKeys: @unchecked Sendable {}
         }
 
         markerPoint = localPoint
-        markerLabel = "\(action) received"
+        markerLabel = action
         markerDate = Date()
         needsDisplay = true
     }
@@ -836,7 +850,7 @@ extension SwipeKeys: @unchecked Sendable {}
             NSBezierPath(ovalIn: NSRect(x: markerPoint.x - 6, y: markerPoint.y - 6, width: 12, height: 12)).fill()
 
             markerLabel.draw(
-                in: NSRect(x: 12, y: 12, width: bounds.width - 24, height: 22),
+                in: NSRect(x: 12, y: 10, width: bounds.width - 24, height: 22),
                 withAttributes: [
                     .font: NSFont.systemFont(ofSize: 13, weight: .medium),
                     .foregroundColor: NSColor.secondaryLabelColor,
@@ -846,18 +860,10 @@ extension SwipeKeys: @unchecked Sendable {}
         } else {
             markerLabel = "Test here"
             "Test here".draw(
-                in: NSRect(x: 12, y: bounds.midY - 18, width: bounds.width - 24, height: 22),
+                in: NSRect(x: 12, y: bounds.midY - 10, width: bounds.width - 24, height: 22),
                 withAttributes: [
                     .font: NSFont.systemFont(ofSize: 16, weight: .medium),
                     .foregroundColor: NSColor.secondaryLabelColor,
-                    .paragraphStyle: paragraph,
-                ]
-            )
-            "Hover, then press a bound key".draw(
-                in: NSRect(x: 12, y: bounds.midY + 8, width: bounds.width - 24, height: 18),
-                withAttributes: [
-                    .font: NSFont.systemFont(ofSize: 11),
-                    .foregroundColor: NSColor.tertiaryLabelColor,
                     .paragraphStyle: paragraph,
                 ]
             )
@@ -880,7 +886,7 @@ enum AppPage {
     private var window: NSWindow?
     private var page: AppPage = .main
     private let testView = TestView(frame: .zero)
-    private let statusLabel = NSTextField(labelWithString: "On")
+    private let statusButton = NSButton(title: "On", target: nil, action: nil)
     private let bindingsLabel = NSTextField(labelWithString: "Arrow + Enter")
     private weak var keyPresetControl: NSSegmentedControl?
     private var customKeyButtons: [BindingSlot: NSButton] = [:]
@@ -1000,8 +1006,7 @@ enum AppPage {
     private func refreshWindowStatus() {
         let enabled = swipeKeys.isEnabled
 
-        statusLabel.stringValue = enabled ? "On" : "Off"
-        statusLabel.textColor = enabled ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.siteSecondaryText
+        setButtonTitle(enabled ? "On" : "Off", color: enabled ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.siteSecondaryText, on: statusButton)
         refreshPermissionIndicators()
     }
 
@@ -1099,14 +1104,16 @@ enum AppPage {
         let titleLabel = NSTextField(labelWithString: "SwipeKeys")
         titleLabel.font = .systemFont(ofSize: 24, weight: .semibold)
         titleLabel.alignment = .center
-        titleLabel.textColor = SwipeKeysPalette.siteOrange
+        titleLabel.textColor = SwipeKeysPalette.siteText
 
-        statusLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        statusLabel.alignment = .center
+        statusButton.target = self
+        statusButton.action = #selector(toggleFromMenu)
+        statusButton.isBordered = false
+        statusButton.font = .systemFont(ofSize: 13, weight: .semibold)
 
         bindingsLabel.font = .systemFont(ofSize: 14, weight: .medium)
-        bindingsLabel.alignment = .right
-        bindingsLabel.textColor = SwipeKeysPalette.siteText
+        bindingsLabel.alignment = .center
+        bindingsLabel.textColor = SwipeKeysPalette.siteSecondaryText
 
         testView.translatesAutoresizingMaskIntoConstraints = false
 
@@ -1121,17 +1128,15 @@ enum AppPage {
         let permissionsButton = pageButton(title: "Permissions", action: #selector(showPermissionsPage))
         self.permissionsButton = permissionsButton
 
-        let toggleLabel = NSTextField(labelWithString: "Toggle: ⌘⌃⌥K")
-        toggleLabel.font = .systemFont(ofSize: 12)
-        toggleLabel.textColor = SwipeKeysPalette.siteSecondaryText
-        toggleLabel.alignment = .center
+        let toggleButton = linkButton(title: "Toggle: ⌘⌃⌥K", action: #selector(toggleFromMenu))
+        setButtonTitle("Toggle: ⌘⌃⌥K", color: SwipeKeysPalette.siteSecondaryText, on: toggleButton)
 
-        let footerStack = NSStackView(views: [toggleLabel, permissionsButton])
+        let footerStack = NSStackView(views: [toggleButton, permissionsButton])
         footerStack.orientation = .horizontal
         footerStack.alignment = .centerY
         footerStack.spacing = 12
 
-        let headerStack = NSStackView(views: [titleLabel, statusLabel])
+        let headerStack = NSStackView(views: [titleLabel, statusButton])
         headerStack.orientation = .horizontal
         headerStack.alignment = .centerY
         headerStack.spacing = 10
@@ -1139,7 +1144,7 @@ enum AppPage {
         let stackView = NSStackView(views: [headerStack, bindingsStack, testView, footerStack])
         stackView.orientation = .vertical
         stackView.alignment = .centerX
-        stackView.spacing = 12
+        stackView.spacing = 10
         stackView.translatesAutoresizingMaskIntoConstraints = false
 
         contentView.addSubview(stackView)
@@ -1148,7 +1153,6 @@ enum AppPage {
             stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
             stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
             stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            bindingsStack.widthAnchor.constraint(equalToConstant: 240),
             testView.widthAnchor.constraint(equalToConstant: Layout.testSize.width),
             testView.heightAnchor.constraint(equalToConstant: Layout.testSize.height),
         ])
@@ -1187,33 +1191,31 @@ enum AppPage {
     private func makeTitle(_ title: String) -> NSTextField {
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: 22, weight: .semibold)
-        titleLabel.textColor = SwipeKeysPalette.siteOrange
+        titleLabel.textColor = SwipeKeysPalette.siteText
         titleLabel.alignment = .center
         return titleLabel
     }
 
-    private func buildPageHeader(title: String, in contentView: NSView) -> NSStackView {
+    private func buildPageHeader(title: String, in contentView: NSView) {
         let backButton = pageButton(title: "Back", action: #selector(showMainPage))
         backButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
         let titleLabel = makeTitle(title)
 
-        let header = NSStackView(views: [backButton, titleLabel])
-        header.orientation = .horizontal
-        header.alignment = .centerY
-        header.spacing = 34
-        header.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(header)
+        backButton.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(backButton)
+        contentView.addSubview(titleLabel)
 
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 24),
-            header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
+            backButton.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 18),
+            backButton.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
+            titleLabel.centerYAnchor.constraint(equalTo: backButton.centerYAnchor),
+            titleLabel.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
         ])
-
-        return header
     }
 
     private func buildKeysPage(in contentView: NSView) {
-        _ = buildPageHeader(title: "Keys", in: contentView)
+        buildPageHeader(title: "Keys", in: contentView)
 
         let keyPresetControl = NSSegmentedControl(labels: ["Arrows", "WASD", "Custom"], trackingMode: .selectOne, target: self, action: #selector(changeKeyPreset(_:)))
         keyPresetControl.segmentStyle = .rounded
@@ -1262,13 +1264,13 @@ enum AppPage {
         NSLayoutConstraint.activate([
             stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 22),
             stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -22),
-            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: 22),
+            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor, constant: 20),
             keyPresetControl.widthAnchor.constraint(equalToConstant: 236),
         ])
     }
 
     private func buildPermissionsPage(in contentView: NSView) {
-        _ = buildPageHeader(title: "Permissions", in: contentView)
+        buildPageHeader(title: "Permissions", in: contentView)
 
         let accessibilityRow = permissionRow(
             title: "Accessibility",
@@ -1302,8 +1304,9 @@ enum AppPage {
         titleLabel.widthAnchor.constraint(equalToConstant: 130).isActive = true
 
         let stateLabel = NSTextField(labelWithString: "Checking")
-        stateLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        stateLabel.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        stateLabel.font = .systemFont(ofSize: 13, weight: .bold)
+        stateLabel.alignment = .center
+        stateLabel.widthAnchor.constraint(equalToConstant: 34).isActive = true
         stateLabelSetter(stateLabel)
 
         let openButton = pageButton(title: "Open", action: action)
@@ -1341,10 +1344,10 @@ enum AppPage {
         permissionsButton?.isBordered = true
         permissionsButton?.bezelStyle = .rounded
 
-        accessibilityStateLabel?.stringValue = accessibilityReady ? "Ready" : "Missing"
+        accessibilityStateLabel?.stringValue = accessibilityReady ? "OK" : "X"
         accessibilityStateLabel?.textColor = accessibilityReady ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.warningRed
 
-        inputMonitoringStateLabel?.stringValue = inputReady ? "Ready" : "Missing"
+        inputMonitoringStateLabel?.stringValue = inputReady ? "OK" : "X"
         inputMonitoringStateLabel?.textColor = inputReady ? SwipeKeysPalette.siteGreen : SwipeKeysPalette.warningRed
     }
 

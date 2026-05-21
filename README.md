@@ -1,6 +1,6 @@
 # SwipeKeys
 
-A tiny macOS app that maps `WASD`, arrow keys, and Space to mouse gestures.
+A tiny macOS app that maps keyboard controls to mouse gestures.
 
 I made this to play Subway Surfers City on my MacBook after enjoying the game a
 bit too much.
@@ -11,14 +11,13 @@ Made by [Guilherme Drezza](https://guidrezza.com).
 
 | Key | Action |
 | --- | --- |
-| `W` or Up Arrow | Swipe up |
-| `S` or Down Arrow | Swipe down |
-| `A` or Left Arrow | Swipe left |
-| `D` or Right Arrow | Swipe right |
-| Space | Tap |
+| Arrow keys | Swipe |
+| Enter | Tap |
 | `Command` + `Control` + `Option` + `K` | Toggle on/off |
 
 Actions happen around the cursor. Original key presses still pass through.
+
+Use `Keys` in the app to switch to `WASD` + Space or set custom bindings.
 
 ## Install
 

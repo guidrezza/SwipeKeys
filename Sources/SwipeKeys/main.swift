@@ -12,6 +12,69 @@ enum GestureMode: String, Sendable {
     case scrollSwipe
 }
 
+enum KeyPreset: String, Sendable {
+    case arrows
+    case wasd
+    case custom
+}
+
+enum BindingSlot: String, CaseIterable, Sendable {
+    case up
+    case down
+    case left
+    case right
+    case tap
+
+    var title: String {
+        switch self {
+        case .up:
+            "Up"
+        case .down:
+            "Down"
+        case .left:
+            "Left"
+        case .right:
+            "Right"
+        case .tap:
+            "Tap"
+        }
+    }
+
+    var swipe: Swipe? {
+        switch self {
+        case .up:
+            Swipe(vertical: -1, horizontal: 0)
+        case .down:
+            Swipe(vertical: 1, horizontal: 0)
+        case .left:
+            Swipe(vertical: 0, horizontal: -1)
+        case .right:
+            Swipe(vertical: 0, horizontal: 1)
+        case .tap:
+            nil
+        }
+    }
+
+    var index: Int {
+        switch self {
+        case .up:
+            0
+        case .down:
+            1
+        case .left:
+            2
+        case .right:
+            3
+        case .tap:
+            4
+        }
+    }
+
+    static func slot(for index: Int) -> BindingSlot? {
+        allCases.first { $0.index == index }
+    }
+}
+
 struct DragSettings: Sendable {
     let distance: Int32
     let steps: Int
@@ -45,10 +108,27 @@ extension Notification.Name {
     static let swipeKeysEnabledChanged = Notification.Name("SwipeKeysEnabledChanged")
     static let swipeKeysTapStatusChanged = Notification.Name("SwipeKeysTapStatusChanged")
     static let swipeKeysModeChanged = Notification.Name("SwipeKeysModeChanged")
+    static let swipeKeysBindingsChanged = Notification.Name("SwipeKeysBindingsChanged")
 }
 
 final class SwipeKeys {
     private static let gestureModeDefaultsKey = "GestureMode"
+    private static let keyPresetDefaultsKey = "KeyPreset"
+    private static let customKeyPrefix = "CustomKey."
+    private static let arrowBindings: [BindingSlot: Int64] = [
+        .up: 126,
+        .down: 125,
+        .left: 123,
+        .right: 124,
+        .tap: 36,
+    ]
+    private static let wasdBindings: [BindingSlot: Int64] = [
+        .up: 13,
+        .down: 1,
+        .left: 0,
+        .right: 2,
+        .tap: 49,
+    ]
     private static let defaultDragSettings = DragSettings(
         distance: 86,
         steps: 6,
@@ -66,29 +146,22 @@ final class SwipeKeys {
     private var pendingActions: [QueuedAction] = []
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private let tapKeyCode: Int64 = 49
     private let toggleKeyCode: Int64 = 40 // K
     private let stateLock = NSLock()
     private var enabled = true
     private var tapActive = false
     private var mode: GestureMode
-
-    private lazy var keyMap: [Int64: Swipe] = [
-        13: Swipe(vertical: -1, horizontal: 0), // W
-        126: Swipe(vertical: -1, horizontal: 0), // Up
-        1: Swipe(vertical: 1, horizontal: 0), // S
-        125: Swipe(vertical: 1, horizontal: 0), // Down
-        0: Swipe(vertical: 0, horizontal: -1), // A
-        123: Swipe(vertical: 0, horizontal: -1), // Left
-        2: Swipe(vertical: 0, horizontal: 1), // D
-        124: Swipe(vertical: 0, horizontal: 1), // Right
-    ]
+    private var keyPreset: KeyPreset
+    private var customBindings: [BindingSlot: Int64]
 
     init(options: Options) {
         self.options = options
         self.source = CGEventSource(stateID: .hidSystemState)
         let savedMode = UserDefaults.standard.string(forKey: Self.gestureModeDefaultsKey)
         self.mode = GestureMode(rawValue: savedMode ?? "") ?? .mouseDrag
+        let savedPreset = UserDefaults.standard.string(forKey: Self.keyPresetDefaultsKey)
+        self.keyPreset = KeyPreset(rawValue: savedPreset ?? "") ?? .arrows
+        self.customBindings = Self.loadCustomBindings()
     }
 
     static var hasAccessibilityPermission: Bool {
@@ -215,13 +288,8 @@ final class SwipeKeys {
     }
 
     func perform(keyCode: Int64) -> Bool {
-        if let swipe = keyMap[keyCode] {
-            enqueue(.swipe(swipe))
-            return true
-        }
-
-        if keyCode == tapKeyCode {
-            enqueue(.tap)
+        if let action = inputAction(for: keyCode) {
+            enqueue(action)
             return true
         }
 
@@ -280,6 +348,110 @@ final class SwipeKeys {
             object: nil,
             userInfo: ["mode": newMode.rawValue]
         )
+    }
+
+    var currentKeyPreset: KeyPreset {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return keyPreset
+    }
+
+    func setKeyPreset(_ preset: KeyPreset) {
+        stateLock.lock()
+        guard keyPreset != preset else {
+            stateLock.unlock()
+            return
+        }
+
+        keyPreset = preset
+        stateLock.unlock()
+
+        UserDefaults.standard.set(preset.rawValue, forKey: Self.keyPresetDefaultsKey)
+        publishBindingsChanged()
+    }
+
+    func keyCode(for slot: BindingSlot) -> Int64? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        switch keyPreset {
+        case .arrows:
+            return Self.arrowBindings[slot]
+        case .wasd:
+            return Self.wasdBindings[slot]
+        case .custom:
+            return customBindings[slot]
+        }
+    }
+
+    func customKeyCode(for slot: BindingSlot) -> Int64? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return customBindings[slot]
+    }
+
+    func setCustomKeyCode(_ keyCode: Int64?, for slot: BindingSlot) {
+        stateLock.lock()
+        if let keyCode {
+            for otherSlot in BindingSlot.allCases where otherSlot != slot && customBindings[otherSlot] == keyCode {
+                customBindings.removeValue(forKey: otherSlot)
+                Self.saveCustomKeyCode(nil, for: otherSlot)
+            }
+            customBindings[slot] = keyCode
+        } else {
+            customBindings.removeValue(forKey: slot)
+        }
+        Self.saveCustomKeyCode(keyCode, for: slot)
+        stateLock.unlock()
+
+        publishBindingsChanged()
+    }
+
+    var bindingsSummary: String {
+        stateLock.lock()
+        let preset = keyPreset
+        let customBindings = customBindings
+        stateLock.unlock()
+
+        switch preset {
+        case .arrows:
+            return "Arrows swipe · Enter taps"
+        case .wasd:
+            return "WASD swipe · Space taps"
+        case .custom:
+            let tap = customBindings[.tap].map(Self.displayName(for:)) ?? "Unbound"
+            return "Custom keys · \(tap) taps"
+        }
+    }
+
+    private func inputAction(for keyCode: Int64) -> InputAction? {
+        stateLock.lock()
+        let preset = keyPreset
+        let customBindings = customBindings
+        stateLock.unlock()
+
+        let bindings: [BindingSlot: Int64]
+        switch preset {
+        case .arrows:
+            bindings = Self.arrowBindings
+        case .wasd:
+            bindings = Self.wasdBindings
+        case .custom:
+            bindings = customBindings
+        }
+
+        for slot in BindingSlot.allCases where bindings[slot] == keyCode {
+            if let swipe = slot.swipe {
+                return .swipe(swipe)
+            }
+            return .tap
+        }
+
+        return nil
+    }
+
+    private func publishBindingsChanged() {
+        NotificationCenter.default.post(name: .swipeKeysBindingsChanged, object: nil)
     }
 
     func isToggleEvent(keyCode: Int64, flags: CGEventFlags) -> Bool {
@@ -529,6 +701,108 @@ final class SwipeKeys {
         return Self.defaultDragSettings
     }
 
+    private static func loadCustomBindings() -> [BindingSlot: Int64] {
+        var bindings = arrowBindings
+
+        for slot in BindingSlot.allCases {
+            let key = customDefaultsKey(for: slot)
+            guard let savedValue = UserDefaults.standard.object(forKey: key) as? Int else {
+                continue
+            }
+
+            if savedValue >= 0 {
+                bindings[slot] = Int64(savedValue)
+            } else {
+                bindings.removeValue(forKey: slot)
+            }
+        }
+
+        return bindings
+    }
+
+    private static func saveCustomKeyCode(_ keyCode: Int64?, for slot: BindingSlot) {
+        UserDefaults.standard.set(Int(keyCode ?? -1), forKey: customDefaultsKey(for: slot))
+    }
+
+    private static func customDefaultsKey(for slot: BindingSlot) -> String {
+        customKeyPrefix + slot.rawValue
+    }
+
+    static func displayName(for keyCode: Int64) -> String {
+        switch keyCode {
+        case 0:
+            "A"
+        case 1:
+            "S"
+        case 2:
+            "D"
+        case 3:
+            "F"
+        case 4:
+            "H"
+        case 5:
+            "G"
+        case 6:
+            "Z"
+        case 7:
+            "X"
+        case 8:
+            "C"
+        case 9:
+            "V"
+        case 11:
+            "B"
+        case 12:
+            "Q"
+        case 13:
+            "W"
+        case 14:
+            "E"
+        case 15:
+            "R"
+        case 16:
+            "Y"
+        case 17:
+            "T"
+        case 31:
+            "O"
+        case 32:
+            "U"
+        case 34:
+            "I"
+        case 35:
+            "P"
+        case 37:
+            "L"
+        case 38:
+            "J"
+        case 40:
+            "K"
+        case 45:
+            "N"
+        case 46:
+            "M"
+        case 36, 76:
+            "Enter"
+        case 49:
+            "Space"
+        case 51:
+            "Delete"
+        case 53:
+            "Esc"
+        case 123:
+            "Left Arrow"
+        case 124:
+            "Right Arrow"
+        case 125:
+            "Down Arrow"
+        case 126:
+            "Up Arrow"
+        default:
+            "Key \(keyCode)"
+        }
+    }
+
     private func targetGesturePoint() -> CGPoint {
         return CGEvent(source: nil)?.location ?? .zero
     }
@@ -653,7 +927,7 @@ extension SwipeKeys: @unchecked Sendable {}
                     .paragraphStyle: paragraph,
                 ]
             )
-            "Hover, then press WASD/arrows/Space".draw(
+            "Hover, then press a bound key".draw(
                 in: NSRect(x: 12, y: bounds.midY + 8, width: bounds.width - 24, height: 18),
                 withAttributes: [
                     .font: NSFont.systemFont(ofSize: 11),
@@ -672,18 +946,30 @@ extension SwipeKeys: @unchecked Sendable {}
     private var permissionTimer: Timer?
     private var isRunning = false
     private var window: NSWindow?
+    private var keyOptionsWindow: NSWindow?
     private let testView = TestView(frame: .zero)
     private let statusLabel = NSTextField(labelWithString: "On")
     private let readinessLabel = NSTextField(labelWithString: "Checking permissions")
+    private let bindingsLabel = NSTextField(labelWithString: "Arrows swipe · Enter taps")
     private lazy var modeControl: NSSegmentedControl = {
         let control = NSSegmentedControl(labels: ["Mouse Drag", "Scroll Swipe"], trackingMode: .selectOne, target: self, action: #selector(changeMode(_:)))
         control.segmentStyle = .rounded
         control.selectedSegment = swipeKeys.gestureMode == .mouseDrag ? 0 : 1
         return control
     }()
+    private lazy var keyPresetControl: NSSegmentedControl = {
+        let control = NSSegmentedControl(labels: ["Arrows", "WASD", "Custom"], trackingMode: .selectOne, target: self, action: #selector(changeKeyPreset(_:)))
+        control.segmentStyle = .rounded
+        control.selectedSegment = selectedSegment(for: swipeKeys.currentKeyPreset)
+        return control
+    }()
+    private var customKeyButtons: [BindingSlot: NSButton] = [:]
+    private var customClearButtons: [BindingSlot: NSButton] = [:]
+    private var captureSlot: BindingSlot?
     private var enabledObserver: NSObjectProtocol?
     private var tapStatusObserver: NSObjectProtocol?
     private var modeObserver: NSObjectProtocol?
+    private var bindingsObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
 
     init(options: Options) {
@@ -720,6 +1006,15 @@ extension SwipeKeys: @unchecked Sendable {}
                 self?.refreshModeControl(mode)
             }
         }
+        self.bindingsObserver = NotificationCenter.default.addObserver(
+            forName: .swipeKeysBindingsChanged,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshBindingsStatus()
+            }
+        }
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -736,6 +1031,7 @@ extension SwipeKeys: @unchecked Sendable {}
         startIfAllowed()
         refreshEnabledStatus(swipeKeys.isEnabled)
         refreshTapStatus(swipeKeys.isTapActive)
+        refreshBindingsStatus()
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -852,13 +1148,13 @@ extension SwipeKeys: @unchecked Sendable {}
         readinessLabel.font = .systemFont(ofSize: 12, weight: .medium)
         readinessLabel.alignment = .center
 
-        let bindingsLabel = NSTextField(labelWithString: "WASD/arrows swipe · Space taps")
         bindingsLabel.font = .systemFont(ofSize: 14, weight: .medium)
         bindingsLabel.alignment = .center
 
         testView.translatesAutoresizingMaskIntoConstraints = false
         modeControl.translatesAutoresizingMaskIntoConstraints = false
 
+        let keysButton = linkButton(title: "Keys", action: #selector(showKeyOptions))
         let accessibilityButton = linkButton(title: "Accessibility", action: #selector(openAccessibilitySettings))
         let inputMonitoringButton = linkButton(title: "Input Monitoring", action: #selector(openInputMonitoringSettings))
 
@@ -867,7 +1163,7 @@ extension SwipeKeys: @unchecked Sendable {}
         toggleLabel.textColor = .tertiaryLabelColor
         toggleLabel.alignment = .center
 
-        let footerStack = NSStackView(views: [toggleLabel, accessibilityButton, inputMonitoringButton])
+        let footerStack = NSStackView(views: [toggleLabel, keysButton, accessibilityButton, inputMonitoringButton])
         footerStack.orientation = .horizontal
         footerStack.alignment = .centerY
         footerStack.spacing = 12
@@ -890,12 +1186,12 @@ extension SwipeKeys: @unchecked Sendable {}
             stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
             stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             testView.widthAnchor.constraint(equalToConstant: 320),
-            testView.heightAnchor.constraint(equalToConstant: 104),
+            testView.heightAnchor.constraint(equalToConstant: 150),
             modeControl.widthAnchor.constraint(equalToConstant: 230),
         ])
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 296),
+            contentRect: NSRect(x: 0, y: 0, width: 420, height: 350),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -922,6 +1218,118 @@ extension SwipeKeys: @unchecked Sendable {}
         refreshWindowStatus()
     }
 
+    private func refreshBindingsStatus() {
+        bindingsLabel.stringValue = swipeKeys.bindingsSummary
+        keyPresetControl.selectedSegment = selectedSegment(for: swipeKeys.currentKeyPreset)
+
+        let customEnabled = swipeKeys.currentKeyPreset == .custom
+        for slot in BindingSlot.allCases {
+            let keyCode = swipeKeys.keyCode(for: slot)
+            let customKeyCode = swipeKeys.customKeyCode(for: slot)
+            let title = keyCode.map(SwipeKeys.displayName(for:)) ?? "Unbound"
+            customKeyButtons[slot]?.title = captureSlot == slot ? "Press key..." : title
+            customKeyButtons[slot]?.isEnabled = customEnabled
+            customClearButtons[slot]?.isEnabled = customEnabled && customKeyCode != nil
+        }
+    }
+
+    private func selectedSegment(for preset: KeyPreset) -> Int {
+        switch preset {
+        case .arrows:
+            0
+        case .wasd:
+            1
+        case .custom:
+            2
+        }
+    }
+
+    private func keyPreset(for segment: Int) -> KeyPreset {
+        switch segment {
+        case 1:
+            .wasd
+        case 2:
+            .custom
+        default:
+            .arrows
+        }
+    }
+
+    @objc private func showKeyOptions() {
+        if let keyOptionsWindow {
+            keyOptionsWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let contentView = NSView()
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: "Key Options")
+        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        titleLabel.alignment = .center
+
+        keyPresetControl.translatesAutoresizingMaskIntoConstraints = false
+
+        let customStack = NSStackView()
+        customStack.orientation = .vertical
+        customStack.alignment = .leading
+        customStack.spacing = 8
+        customStack.translatesAutoresizingMaskIntoConstraints = false
+
+        for slot in BindingSlot.allCases {
+            let label = NSTextField(labelWithString: slot.title)
+            label.font = .systemFont(ofSize: 13, weight: .medium)
+            label.widthAnchor.constraint(equalToConstant: 52).isActive = true
+
+            let keyButton = NSButton(title: "Unbound", target: self, action: #selector(beginCustomKeyCapture(_:)))
+            keyButton.bezelStyle = .rounded
+            keyButton.tag = slot.index
+            keyButton.widthAnchor.constraint(equalToConstant: 128).isActive = true
+            customKeyButtons[slot] = keyButton
+
+            let clearButton = NSButton(title: "Clear", target: self, action: #selector(clearCustomKey(_:)))
+            clearButton.bezelStyle = .rounded
+            clearButton.tag = slot.index
+            clearButton.widthAnchor.constraint(equalToConstant: 70).isActive = true
+            customClearButtons[slot] = clearButton
+
+            let row = NSStackView(views: [label, keyButton, clearButton])
+            row.orientation = .horizontal
+            row.alignment = .centerY
+            row.spacing = 10
+            customStack.addArrangedSubview(row)
+        }
+
+        let stackView = NSStackView(views: [titleLabel, keyPresetControl, customStack])
+        stackView.orientation = .vertical
+        stackView.alignment = .centerX
+        stackView.spacing = 16
+        stackView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(stackView)
+
+        NSLayoutConstraint.activate([
+            stackView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 24),
+            stackView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -24),
+            stackView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            keyPresetControl.widthAnchor.constraint(equalToConstant: 250),
+        ])
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 360, height: 310),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Key Options"
+        window.contentView = contentView
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        self.keyOptionsWindow = window
+        refreshBindingsStatus()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func installLocalTestMonitor() {
         guard localKeyMonitor == nil else {
             return
@@ -934,6 +1342,15 @@ extension SwipeKeys: @unchecked Sendable {}
 
             if event.modifierFlags.contains(.command), event.keyCode == 12 {
                 NSApp.terminate(nil)
+                return nil
+            }
+
+            if let captureSlot = self.captureSlot {
+                if event.keyCode != 53 {
+                    self.swipeKeys.setCustomKeyCode(Int64(event.keyCode), for: captureSlot)
+                }
+                self.captureSlot = nil
+                self.refreshBindingsStatus()
                 return nil
             }
 
@@ -972,6 +1389,36 @@ extension SwipeKeys: @unchecked Sendable {}
 
     @objc private func changeMode(_ sender: NSSegmentedControl) {
         swipeKeys.setGestureMode(sender.selectedSegment == 0 ? .mouseDrag : .scrollSwipe)
+    }
+
+    @objc private func changeKeyPreset(_ sender: NSSegmentedControl) {
+        captureSlot = nil
+        swipeKeys.setKeyPreset(keyPreset(for: sender.selectedSegment))
+        refreshBindingsStatus()
+    }
+
+    @objc private func beginCustomKeyCapture(_ sender: NSButton) {
+        guard let slot = BindingSlot.slot(for: sender.tag) else {
+            return
+        }
+
+        if swipeKeys.currentKeyPreset != .custom {
+            swipeKeys.setKeyPreset(.custom)
+        }
+
+        captureSlot = slot
+        refreshBindingsStatus()
+        keyOptionsWindow?.makeFirstResponder(sender)
+    }
+
+    @objc private func clearCustomKey(_ sender: NSButton) {
+        guard let slot = BindingSlot.slot(for: sender.tag) else {
+            return
+        }
+
+        captureSlot = nil
+        swipeKeys.setCustomKeyCode(nil, for: slot)
+        refreshBindingsStatus()
     }
 
     @objc private func showWindowFromMenu() {
@@ -1071,10 +1518,9 @@ func printHelp() {
     print("""
     SwipeKeys
 
-    Turns WASD and arrow keys into mouse-drag swipe gestures, and Space into
-    a tap wherever the cursor is. Swipes are short drags so games that
-    accept click-and-drag input can receive them. Original key events pass through
-    normally.
+    Turns bound keys into mouse-drag swipe gestures and taps wherever the cursor is.
+    Defaults are arrow keys for swipes and Enter for tap. Original key events pass
+    through normally.
 
     Usage:
       swipekeys [--intensity pixels] [--scroll-intensity pixels] [--repeats number] [--verbose]

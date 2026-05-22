@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${VERSION:-1.0.0}"
+VERSION="${VERSION:-1.1.1}"
 APP_DIR="$ROOT_DIR/dist/SwipeKeys.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -17,6 +17,7 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 
 cp "$ROOT_DIR/.build/release/swipekeys" "$MACOS_DIR/SwipeKeys"
 iconutil -c icns "$ROOT_DIR/dist/AppIcon.iconset" -o "$RESOURCES_DIR/AppIcon.icns"
+rm -rf "$ROOT_DIR/dist/AppIcon.iconset"
 
 cat > "$CONTENTS_DIR/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -50,5 +51,6 @@ PLIST
 perl -0pi -e "s/__VERSION__/$VERSION/g" "$CONTENTS_DIR/Info.plist"
 
 chmod +x "$MACOS_DIR/SwipeKeys"
+strip -x "$MACOS_DIR/SwipeKeys"
 codesign --force --deep --sign - "$APP_DIR" >/dev/null
 echo "Built $APP_DIR"

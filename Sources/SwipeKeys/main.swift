@@ -148,14 +148,17 @@ final class SwipeKeys {
     private var actionRunning = false
     private var actionGeneration = 0
     private var pendingActions: [QueuedAction] = []
+    private var pendingActionStartIndex = 0
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private let toggleKeyCode: Int64 = 40 // K
     private let stateLock = NSLock()
     private var enabled = true
+    private var applicationActive = false
     private var tapActive = false
     private var keyPreset: KeyPreset
     private var customBindings: [BindingSlot: Int64]
+    private var activeActionsByKeyCode: [Int64: InputAction]
 
     init(options: Options) {
         self.options = options
@@ -163,6 +166,7 @@ final class SwipeKeys {
         let savedPreset = UserDefaults.standard.string(forKey: Self.keyPresetDefaultsKey)
         self.keyPreset = KeyPreset(rawValue: savedPreset ?? "") ?? .arrows
         self.customBindings = Self.loadCustomBindings()
+        self.activeActionsByKeyCode = Self.actionLookup(for: keyPreset, customBindings: customBindings)
     }
 
     static var hasAccessibilityPermission: Bool {
@@ -266,7 +270,7 @@ final class SwipeKeys {
             return nil
         }
 
-        if frontmostAppIsSwipeKeys() {
+        if isApplicationActive {
             return Unmanaged.passUnretained(event)
         }
 
@@ -297,8 +301,16 @@ final class SwipeKeys {
         return false
     }
 
-    private func frontmostAppIsSwipeKeys() -> Bool {
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+    var isApplicationActive: Bool {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return applicationActive
+    }
+
+    func setApplicationActive(_ active: Bool) {
+        stateLock.lock()
+        applicationActive = active
+        stateLock.unlock()
     }
 
     var isEnabled: Bool {
@@ -341,6 +353,7 @@ final class SwipeKeys {
         }
 
         keyPreset = preset
+        activeActionsByKeyCode = Self.actionLookup(for: preset, customBindings: customBindings)
         stateLock.unlock()
 
         UserDefaults.standard.set(preset.rawValue, forKey: Self.keyPresetDefaultsKey)
@@ -379,6 +392,7 @@ final class SwipeKeys {
             customBindings.removeValue(forKey: slot)
         }
         Self.saveCustomKeyCode(keyCode, for: slot)
+        activeActionsByKeyCode = Self.actionLookup(for: keyPreset, customBindings: customBindings)
         stateLock.unlock()
 
         publishBindingsChanged()
@@ -397,28 +411,33 @@ final class SwipeKeys {
 
     private func inputAction(for keyCode: Int64) -> InputAction? {
         stateLock.lock()
-        let preset = keyPreset
-        let customBindings = customBindings
+        let action = activeActionsByKeyCode[keyCode]
         stateLock.unlock()
 
+        return action
+    }
+
+    private static func actionLookup(for preset: KeyPreset, customBindings: [BindingSlot: Int64]) -> [Int64: InputAction] {
         let bindings: [BindingSlot: Int64]
         switch preset {
         case .arrows:
-            bindings = Self.arrowBindings
+            bindings = arrowBindings
         case .wasd:
-            bindings = Self.wasdBindings
+            bindings = wasdBindings
         case .custom:
             bindings = customBindings
         }
 
-        for slot in BindingSlot.allCases where bindings[slot] == keyCode {
-            if let swipe = slot.swipe {
-                return .swipe(swipe)
+        var actions: [Int64: InputAction] = [:]
+        actions.reserveCapacity(BindingSlot.allCases.count)
+        for slot in BindingSlot.allCases {
+            guard let keyCode = bindings[slot] else {
+                continue
             }
-            return .tap
+            actions[keyCode] = slot.swipe.map(InputAction.swipe) ?? .tap
         }
 
-        return nil
+        return actions
     }
 
     private func publishBindingsChanged() {
@@ -447,7 +466,7 @@ final class SwipeKeys {
         let queuedAction = QueuedAction(action: action, generation: actionGeneration)
         if actionRunning {
             let maxQueuedActions = max(1, options.maxQueuedActions)
-            if pendingActions.count < maxQueuedActions {
+            if pendingActions.count - pendingActionStartIndex < maxQueuedActions {
                 pendingActions.append(queuedAction)
             } else if options.verbose {
                 print("Dropping input because queue is full")
@@ -474,9 +493,18 @@ final class SwipeKeys {
 
     private func finishAction() {
         actionLock.lock()
-        let next = pendingActions.isEmpty ? nil : pendingActions.removeFirst()
+        let next = pendingActionStartIndex < pendingActions.count ? pendingActions[pendingActionStartIndex] : nil
+        if next != nil {
+            pendingActionStartIndex += 1
+            if pendingActionStartIndex > 16 {
+                pendingActions.removeFirst(pendingActionStartIndex)
+                pendingActionStartIndex = 0
+            }
+        }
         if next == nil {
             actionRunning = false
+            pendingActions.removeAll(keepingCapacity: true)
+            pendingActionStartIndex = 0
         }
         actionLock.unlock()
 
@@ -488,7 +516,8 @@ final class SwipeKeys {
     private func cancelQueuedActions() {
         actionLock.lock()
         actionGeneration += 1
-        pendingActions.removeAll()
+        pendingActions.removeAll(keepingCapacity: true)
+        pendingActionStartIndex = 0
         actionLock.unlock()
     }
 
@@ -770,6 +799,21 @@ extension SwipeKeys: @unchecked Sendable {}
     private var markerLabel = "Test here"
     private var markerDate = Date.distantPast
     private var dragStartPoint: CGPoint?
+    private let textParagraphStyle: NSParagraphStyle = {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.alignment = .center
+        return paragraph
+    }()
+    private lazy var markerTextAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 13, weight: .medium),
+        .foregroundColor: NSColor.secondaryLabelColor,
+        .paragraphStyle: textParagraphStyle,
+    ]
+    private lazy var placeholderTextAttributes: [NSAttributedString.Key: Any] = [
+        .font: NSFont.systemFont(ofSize: 16, weight: .medium),
+        .foregroundColor: NSColor.secondaryLabelColor,
+        .paragraphStyle: textParagraphStyle,
+    ]
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -839,9 +883,6 @@ extension SwipeKeys: @unchecked Sendable {}
         path.lineWidth = 1
         path.stroke()
 
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.alignment = .center
-
         if let markerPoint, Date().timeIntervalSince(markerDate) < 5 {
             SwipeKeysPalette.siteGreen.withAlphaComponent(0.20).setFill()
             NSBezierPath(ovalIn: NSRect(x: markerPoint.x - 24, y: markerPoint.y - 24, width: 48, height: 48)).fill()
@@ -851,21 +892,13 @@ extension SwipeKeys: @unchecked Sendable {}
 
             markerLabel.draw(
                 in: NSRect(x: 12, y: 10, width: bounds.width - 24, height: 22),
-                withAttributes: [
-                    .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                    .paragraphStyle: paragraph,
-                ]
+                withAttributes: markerTextAttributes
             )
         } else {
             markerLabel = "Test here"
             "Test here".draw(
                 in: NSRect(x: 12, y: bounds.midY - 10, width: bounds.width - 24, height: 22),
-                withAttributes: [
-                    .font: NSFont.systemFont(ofSize: 16, weight: .medium),
-                    .foregroundColor: NSColor.secondaryLabelColor,
-                    .paragraphStyle: paragraph,
-                ]
+                withAttributes: placeholderTextAttributes
             )
         }
     }
@@ -899,6 +932,8 @@ enum AppPage {
     private var tapStatusObserver: NSObjectProtocol?
     private var bindingsObserver: NSObjectProtocol?
     private var localKeyMonitor: Any?
+    private weak var enabledMenuItem: NSMenuItem?
+    private weak var listenerMenuItem: NSMenuItem?
 
     init(options: Options) {
         self.swipeKeys = SwipeKeys(options: options)
@@ -961,6 +996,14 @@ enum AppPage {
         return true
     }
 
+    func applicationDidBecomeActive(_ notification: Notification) {
+        swipeKeys.setApplicationActive(true)
+    }
+
+    func applicationDidResignActive(_ notification: Notification) {
+        swipeKeys.setApplicationActive(false)
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -971,9 +1014,18 @@ enum AppPage {
         refreshStatus()
 
         if !isRunning {
-            permissionTimer?.invalidate()
-            permissionTimer = Timer.scheduledTimer(timeInterval: 2, target: self, selector: #selector(retryPermission), userInfo: nil, repeats: true)
+            startPermissionTimer()
         }
+    }
+
+    private func startPermissionTimer() {
+        guard permissionTimer == nil else {
+            return
+        }
+
+        let timer = Timer.scheduledTimer(timeInterval: 2, target: self, selector: #selector(retryPermission), userInfo: nil, repeats: true)
+        timer.tolerance = 1
+        permissionTimer = timer
     }
 
     @objc private func retryPermission(_ timer: Timer) {
@@ -1011,9 +1063,21 @@ enum AppPage {
     }
 
     private func refreshStatus() {
+        installStatusMenuIfNeeded()
+        enabledMenuItem?.title = swipeKeys.isEnabled ? "On" : "Off"
+        listenerMenuItem?.title = isRunning ? "Global Listener Active" : "Global Listener Waiting"
+    }
+
+    private func installStatusMenuIfNeeded() {
+        guard statusItem.menu == nil else {
+            return
+        }
+
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: swipeKeys.isEnabled ? "On" : "Off", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: isRunning ? "Global Listener Active" : "Global Listener Waiting", action: nil, keyEquivalent: ""))
+        let enabledItem = NSMenuItem(title: "On", action: nil, keyEquivalent: "")
+        let listenerItem = NSMenuItem(title: "Global Listener Waiting", action: nil, keyEquivalent: "")
+        menu.addItem(enabledItem)
+        menu.addItem(listenerItem)
         menu.addItem(.separator())
 
         let toggleItem = NSMenuItem(title: "Toggle On/Off", action: #selector(toggleFromMenu), keyEquivalent: "k")
@@ -1038,6 +1102,8 @@ enum AppPage {
         menu.addItem(quitItem)
 
         statusItem.menu = menu
+        enabledMenuItem = enabledItem
+        listenerMenuItem = listenerItem
     }
 
     private func showWindow() {

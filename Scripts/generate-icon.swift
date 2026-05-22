@@ -15,7 +15,6 @@ let sizes: [(name: String, pixels: Int)] = [
     ("icon_256x256.png", 256),
     ("icon_256x256@2x.png", 512),
     ("icon_512x512.png", 512),
-    ("icon_512x512@2x.png", 1024),
 ]
 
 func roundedRect(_ rect: CGRect, radius: CGFloat) -> NSBezierPath {
@@ -84,8 +83,27 @@ func drawHand(side: CGFloat) {
 
 for size in sizes {
     let side = CGFloat(size.pixels)
-    let image = NSImage(size: NSSize(width: side, height: side))
-    image.lockFocus()
+    guard
+        let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: size.pixels,
+            pixelsHigh: size.pixels,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ),
+        let context = NSGraphicsContext(bitmapImageRep: bitmap)
+    else {
+        fatalError("Could not create bitmap for \(size.name)")
+    }
+
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = context
+    context.cgContext.clear(CGRect(x: 0, y: 0, width: side, height: side))
 
     let iconRect = CGRect(x: side * 0.055, y: side * 0.055, width: side * 0.89, height: side * 0.89)
     let background = roundedRect(iconRect, radius: side * 0.22)
@@ -106,13 +124,9 @@ for size in sizes {
     background.lineWidth = side * 0.012
     background.stroke()
 
-    image.unlockFocus()
+    NSGraphicsContext.restoreGraphicsState()
 
-    guard
-        let tiff = image.tiffRepresentation,
-        let bitmap = NSBitmapImageRep(data: tiff),
-        let png = bitmap.representation(using: .png, properties: [:])
-    else {
+    guard let png = bitmap.representation(using: .png, properties: [:]) else {
         fatalError("Could not render \(size.name)")
     }
 

@@ -5,7 +5,13 @@ A tiny macOS app that maps keyboard controls to mouse gestures.
 I made this to play Subway Surfers City on my MacBook after enjoying the game a
 bit too much.
 
-Made by [Guilherme Drezza](https://guidrezza.com).
+Made by [Guilherme Drezza](https://nickdrezza.com).
+
+## Portfolio Notes
+
+- **Problem:** some macOS games expect touch gestures even when the useful input device is a keyboard.
+- **Approach:** map keyboard shortcuts to cursor-centered swipe and tap gestures while keeping the app tiny, native, and easy to toggle.
+- **What it shows:** Swift, macOS input permissions, event monitoring, small native utility design, and release packaging.
 
 ## Controls
 
